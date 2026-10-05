@@ -11,6 +11,10 @@ name: publish
 on:
   release:
     types: [published]
+  # Retry path: `gh workflow run publish.yml --ref v0.1.4` re-fires the exact tag
+  # without deleting and recreating the release (useful when GitHub Actions is
+  # degraded and the release-triggered run sits queued).
+  workflow_dispatch:
 
 jobs:
   publish-jsr:
@@ -21,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -38,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
