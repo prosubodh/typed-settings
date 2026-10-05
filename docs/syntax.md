@@ -1,105 +1,98 @@
 # Syntax
 
-What happens *inside* a source: `.env` format, `__` keys, `$VAR` expansion, coercion, arrays, and merge strategies.
+What happens *inside* a source: the `.env` grammar, `__` keys, `$VAR` expansion, coercion, arrays, and merge strategies.
 
 ## `.env` format
 
 POSIX-style, one `KEY=value` per line:
 
 ```sh
-export APP_PORT=3000        # `export ` prefix allowed (once)
-APP_URL=https://x.test      # first `=` splits; values may contain `=`
-APP_EMPTY=                  # empty value -> ''
+export APP_PORT=3000        # an `export ` prefix is allowed (once)
+APP_URL=https://x.test      # split on the first `=`; values can contain `=`
+APP_EMPTY=                  # empty value means ''
 APP_HASH=a#b                # `#` inside a value is literal...
-APP_TRIM=a # comment        # ...unless preceded by whitespace -> comment
-APP_SINGLE='a # b'          # single quotes: literal, no expansion
-APP_MULTI="line1\nline2"    # double quotes: \n \r \t escapes + real multiline
+APP_TRIM=a # comment        # ...unless whitespace comes before it, then it's a comment
+APP_SINGLE='a # b'          # single quotes: completely literal
+APP_MULTI="line1\nline2"    # double quotes: \n \r \t escapes, and real multiline values
 APP_DUP=1
-APP_DUP=2                   # duplicate keys: last wins
-BOM stripped, surrounding whitespace trimmed.
+APP_DUP=2                   # duplicates: last one wins
 ```
 
-Rejected with `ParseError`: backtick values, unterminated quotes, bare keys (`JUSTAKEY`), empty keys (`=x`).
+BOMs are stripped and surrounding whitespace trimmed. These throw `ParseError`: backtick values, unterminated quotes, bare keys (`JUSTAKEY`), empty keys (`=x`).
 
 ## Key model
 
-After prefix stripping, flat keys expand on `__` **only** (a single `_` is literal), then lowercase:
+Once the prefix is off, flat keys split on `__` and nothing else. A single `_` is just a character. Then everything lowercases:
 
 ```
 APP_DB__URL        ->  db.url          (with prefix APP_)
-APP_ARR__0         ->  arr[0]          (indexed, see Arrays)
+APP_ARR__0         ->  arr[0]          (indexed; see Arrays below)
 single_word        ->  single_word     (untouched)
 ```
 
-- Keys outside `[A-Za-z0-9_]` are ignored.
-- Empty segments (`A____B`) throw `E_EMPTY_SEGMENT`.
-- `__proto__` / `constructor` / `prototype` throw `E_PROTO` (case-insensitively) — prototype pollution is a hard error, never silent.
-- Structured files (JSON/YAML/TOML) keep native nesting and case; only top-level keys take the global `prefix`.
+Keys with characters outside `[A-Za-z0-9_]` are ignored. Empty segments (`A____B`) throw `E_EMPTY_SEGMENT`. And `__proto__` / `constructor` / `prototype` throw `E_PROTO`, matched case-insensitively. Prototype pollution is a hard error here, never something that slips through quietly.
+
+Structured files (JSON/YAML/TOML) don't go through any of this: their nesting is native and their case is preserved. Only their top-level keys take the global `prefix`.
 
 ## Expansion
 
-Single pass over every string leaf, after merge. Names are `[A-Za-z_][A-Za-z0-9_]*`, longest match wins:
+One pass over every string leaf, after merging. Names are `[A-Za-z_][A-Za-z0-9_]*` and the longest match wins, so `$VAR_SUFFIX` doesn't get misread as `$VAR` plus junk:
 
 ```sh
 HOST=db.internal
 URL=postgres://${HOST}/app     # -> postgres://db.internal/app
-FALLBACK=${MISSING:-localhost}  # `:-` : default on unset OR empty
-LOOSE=${MISSING-def}            # `-`  : default on unset only
-ESCAPED=pa$$w0rd                # $$ -> literal $
-LITERAL=\$NOT_A_VAR             # \$ -> literal $
+FALLBACK=${MISSING:-localhost}  # `:-` fills in when unset OR empty
+LOOSE=${MISSING-def}            # `-` fills in when unset only
+ESCAPED=pa$$w0rd                # $$ is a literal $
+LITERAL=\$NOT_A_VAR             # so is \$
 CHAIN=${URL}                    # chains resolve transitively
 ```
 
-- Recursive defaults: `${A:-${B:-z}}` works.
-- `\}` escapes a brace inside a default.
-- `:=`, `:?`, `:+` are rejected (`E_BAD_OP`); only `:-` and `-` exist.
-- Unresolved names throw `E_UNRESOLVED` unless `allowUnresolved: true` (keeps the literal).
-- Self/mutual references throw `E_CIRCULAR`, never hang.
-- Vault values are **not** expanded unless `expandSecrets: true`.
+Defaults can nest (`${A:-${B:-z}}`), and `\}` escapes a brace inside one. The `:=`, `:?`, and `:+` operators don't exist here; reaching for them gives `E_BAD_OP`. A name with no value and no default throws `E_UNRESOLVED`, unless `allowUnresolved: true` keeps the literal text. Variables referencing each other in a circle throw `E_CIRCULAR` instead of hanging.
+
+Vault values skip expansion by default. Passwords and connection strings are full of `$` characters that mean nothing, so you have to ask for it with `expandSecrets: true`.
 
 ## Coercion
 
-Best-effort, per leaf, never throws. The schema always has the final word:
+Best effort, per leaf, and it never throws. If nothing matches, the string passes through untouched and your schema gets the final say:
 
-| Input | Result |
+| Input | Comes out as |
 |---|---|
-| `''` | `''` (stays empty) |
-| `true` / `TRUE`, `yes`, `y`, `on` (any case) | `true` (`no`/`n`/`off` → `false`) |
-| `null` / `NULL` | `null` |
-| `3000`, `-12` | numbers (safe integers only; `9007199254740993` stays a string) |
+| `''` | `''` (empty stays empty) |
+| `true`, `TRUE`, `yes`, `y`, `on` (any case) | `true` (`no`/`n`/`off` go to `false`) |
+| `null`, `NULL` | `null` |
+| `3000`, `-12` | numbers (safe integers only, so `9007199254740993` stays a string) |
 | `1.5`, `1e3` | numbers (`0x10`, `1_0`, `NaN`, `Infinity` stay strings) |
 | `{"a":1}`, `[1,2]` | parsed JSON |
-| `a,b,c` | `['a','b','c']` (quote-aware; `\,` escapes; fully-quoted singles unwrap) |
+| `a,b,c` | `['a','b','c']`, split quote-aware (`\,` escapes a comma) |
 
-Note: coercion can't see the schema, so `greeting: 'hello, world'` becomes `['hello', ' world']` and a `z.string()` target rejects it. Quote it (`greeting: '"hello, world"'`) or use a list type.
+One consequence worth knowing: coercion can't see your schema, so `greeting: 'hello, world'` becomes `['hello', ' world']` and a `z.string()` target rejects it. Quote the value (`'"hello, world"'`) or type the field as a list.
 
 ## Arrays
 
-Dense indexed keys fold to arrays; mixing shapes in one layer is an error:
+Densely numbered keys fold into arrays. Mixing shapes in one layer is an error, in either order:
 
 ```sh
 ARR__0=a
-ARR__1=b     # -> arr: ['a', 'b']
+ARR__1=b     # arr is ['a', 'b']
 ```
 
-- Gaps (`__0` + `__2`, no `__1`) → `E_SPARSE_ARRAY`. More than 1024 elements → `E_ARRAY_CAP`.
-- Same layer scalar/list + indexed (`ARR=a,b` with `ARR__0=x`), or indexed + named (`ARR__0` with `ARR__FOO`) → `E_ARRAY_MIX`, in either order.
-- Indexes under *different* tops don't interfere (`A__0` + `B__NAME` is fine).
+Gaps (`__0` plus `__2` with no `__1`) throw `E_SPARSE_ARRAY`. More than 1024 elements throws `E_ARRAY_CAP`. A scalar or list next to indexed keys in the same layer (`ARR=a,b` alongside `ARR__0=x`), or indexed keys next to named ones (`ARR__0` alongside `ARR__FOO`), throws `E_ARRAY_MIX`. Indexes under *different* tops don't interact, so `A__0` plus `B__NAME` is fine.
 
-Cross-layer array merge is set by `arrayStrategy`:
+How arrays merge *across* layers is `arrayStrategy`:
 
 | Strategy | Behavior |
 |---|---|
-| `replace` (default) | Later layer's array wins wholesale (shrink allowed) |
-| `concat` | Arrays concatenate |
-| `mergeIndex` | Per-index deep union; holes → `E_SPARSE_ARRAY`; >1024 → `E_ARRAY_CAP` |
+| `replace` (default) | The later array wins wholesale, which is also how you shrink one |
+| `concat` | The arrays concatenate |
+| `mergeIndex` | Per-index deep union; holes throw `E_SPARSE_ARRAY`, past 1024 throws `E_ARRAY_CAP` |
 
 ## Unknown keys
 
 | Mode | Behavior |
 |---|---|
-| `strip` (default) | Drop keys the schema doesn't declare |
-| `preserve` | Deep-merge undeclared input keys into the result |
-| `reject` | Throw `E_UNKNOWN_KEY` listing every extra leaf path (`db.port`, `tags[1]`) |
+| `strip` (default) | Keys the schema doesn't declare are dropped |
+| `preserve` | Undeclared input keys are deep-merged into the result |
+| `reject` | Throws `E_UNKNOWN_KEY` with every extra leaf path (`db.port`, `tags[1]`) |
 
-The CLI flag for `reject` is `check --strict`.
+On the CLI, `check --strict` means `reject`.

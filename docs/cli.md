@@ -1,58 +1,53 @@
 # CLI
 
-The `typed-settings` binary validates, scaffolds, generates, and supervises config. Exit codes are part of the contract so CI can rely on them.
+The `typed-settings` binary does four jobs: check a config, scaffold a project, generate artifacts from a schema, and supervise a process. Exit codes are contractual so CI can depend on them.
 
-## `check` — validate a config
+## `check`: validate a config
 
 ```sh
 typed-settings check -s src/settings.ts -c base.yaml,.env [--strict] [--no-expand] \
   [--array replace|concat|mergeIndex] [--format human|json] [--schema-export NAME] [--prefix APP_]
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `-s, --schema` | — (required) | schema file to load |
-| `-c, --config` | `.env,env` | comma-separated sources, same spellings as `sources` |
-| `--strict` | `false` | `unknownKeys: 'reject'` (exit 1 on extras) |
-| `--no-expand` | expand on | skip `$VAR` expansion |
-| `--array` | `replace` | cross-layer array strategy |
-| `--format` | `human` | `json` prints `{ok, config}` / `{ok:false, issues\|error}` |
-| `--schema-export` | auto | which export holds the schema (must be a Standard Schema; typos fail loudly) |
-| `--prefix` | — | global prefix strip |
+`-s` is required; `-c` defaults to `.env,env` using the same source spellings as the library. `--strict` turns on `unknownKeys: 'reject'`, `--no-expand` skips `$VAR` expansion, `--format json` prints `{ok, config}` or `{ok:false, issues|error}` for machines.
 
-Exit codes: `0` valid · `1` invalid config · `2` schema-load failure or bad flags.
+Exit codes: `0` for valid, `1` for invalid config, `2` when the schema can't be loaded or the flags are wrong.
 
-## `init` — scaffold a project
+## `init`: scaffold a project
 
 ```sh
 typed-settings init --lib zod --format env [--dir .] [--force|--dry-run|--check]
 ```
 
-- `--lib zod|valibot|arktype|yup|joi` (default `zod`), `--format env|yaml|toml` (default `env`).
-- Writes `src/settings.ts` + `.env.example` (or `config.yaml` / `config.toml`) with mode `0600`.
-- `--dry-run` / `--check` print `create|exists|overwrite` per file without writing; `--check` exits `2` on drift. Existing files are only overwritten with `--force`.
+`--lib` picks the validator flavor (`zod`, `valibot`, `arktype`, `yup`, `joi`; default `zod`) and `--format` the example file (`env`, `yaml`, `toml`; default `env`). It writes `src/settings.ts` plus `.env.example` (or `config.yaml` / `config.toml`) with mode `0600`, since these files tend to collect real secrets eventually.
 
-## `gen` — generate docs from a schema
+`--dry-run` and `--check` print `create`, `exists`, or `overwrite` per file without writing anything. `--check` exits `2` when content drifted, so it works as a CI gate. Existing files are only overwritten with `--force`.
+
+## `gen`: generate artifacts from a schema
 
 ```sh
 typed-settings gen --schema src/settings.ts --out .env.example --docs CONFIG.md [--prefix APP_] [--force]
 ```
 
-- Emits `KEY=value # type required|default: …` lines plus a `| Env | Path | Type | Required | Default |` markdown table.
-- Zod 3/4, Valibot, and ArkType schemas describe fully (including `def.entries`-style Zod 4 enums). Anything else emits a commented placeholder and a `GEN_BEST_EFFORT` warning on stderr — verify manually.
-- Without `--out`/`--docs`, artifacts print to stdout. Existing files need `--force` (`E_EXISTS`, exit 2).
+Writes `KEY=value # type required|default: …` lines plus a markdown table (`| Env | Path | Type | Required | Default |`). Zod 3/4, Valibot, and ArkType schemas describe fully (including Zod 4 enums, whose members live in `def.entries` rather than `def.values`). Anything else produces a commented placeholder and a `GEN_BEST_EFFORT` warning on stderr: a starting point, not gospel. Check the types by hand.
 
-## `watch` — validate and supervise
+Leave off `--out`/`--docs` and the artifacts print to stdout instead. Existing files are never clobbered without `--force` (`E_EXISTS`, exit 2).
+
+## `watch`: validate and supervise
 
 ```sh
 typed-settings watch -s src/settings.ts -c base.yaml --once
 typed-settings watch -s src/settings.ts -c base.yaml -- node server.js
 ```
 
-- `--once`: single validation, no hanging. Prints `OK: config valid`; exits `0` valid, `1` invalid, `2` load error. A trailing `-- cmd` is ignored with a warning.
-- Long-run: revalidates on file change (`reload: ok changed=[port]`), keeps the old config on errors, restarts the child on success. `--exit-on-error` exits `1` on the first invalid reload. SIGINT/SIGTERM dispose cleanly (exit `0`).
-- Same `--strict/--no-expand/--array/--schema-export/--prefix` options as `check`.
+`--once` validates a single snapshot and exits: `0` valid, `1` invalid, `2` load error. A trailing `-- cmd` with `--once` makes no sense (there's nothing to supervise), so it's ignored with a warning rather than failing.
+
+Without `--once`, it watches and revalidates on change: `reload: ok changed=[port]` on success, `reload: invalid, kept old` plus the error on failure, and the old config stays live either way. A child command is spawned at startup and restarted on every successful reload; `--exit-on-error` exits `1` on the first bad reload instead. SIGINT/SIGTERM dispose cleanly with exit `0`. Takes the same `--strict`/`--no-expand`/`--array`/`--schema-export`/`--prefix` options as `check`.
 
 ## Schema resolution
 
-Schemas load via `jiti` (so `.ts` files work directly). Resolution order: `--schema-export NAME` → `schema` → `settingsSchema` → `default` → first export implementing `~standard` (ArkType function schemas included). A missing or non-schema export is `SCHEMA_LOAD_ERROR` (exit 2), with one deliberate strictness: an explicit `--schema-export` that doesn't resolve to a schema fails instead of falling back — silently validating the wrong schema would be worse.
+Schemas load through `jiti`, so plain `.ts` files work directly. Resolution order: an explicit `--schema-export NAME` first, then `schema`, `settingsSchema`, `default`, then the first export that implements `~standard` (ArkType's function schemas count). Anything else is `SCHEMA_LOAD_ERROR`, exit 2.
+
+One deliberate strictness: if you pass `--schema-export` and it doesn't resolve to a schema, that's a hard error, not a cue to keep guessing. Validating the wrong schema quietly would be worse than refusing loudly.
+
+A note for the curious: `jiti` has to run with `interopDefault: false` here. With it on, a Zod schema's `.default()` *method* gets mistaken for a nested ESM default export, and you get back a bound function instead of your schema. The loader resolves exports explicitly instead.
