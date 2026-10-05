@@ -28,13 +28,13 @@ Going field by field:
 - **`schema`** (required). A Standard Schema object. If its `validate()` returns a promise, sync `settings()` throws `USE_ASYNC` and you need `settingsAsync()`.
 - **`sources`** (default `['.env', 'env']`). Ordered layers, later wins per leaf. Details below.
 - **`prefix`**. Strips case-insensitively and exactly once; whatever's left must be non-empty. A per-source `prefix` replaces the global one for that source, it doesn't stack with it.
-- **`envMap`**. Escape hatch for awkward keys. Matched case-insensitively, and the mapped value is used literally: no prefix stripping, no `__` splitting (then lowercased like everything else).
+- **`envMap`**. Escape hatch for awkward keys. Maps an env key to the literal key that variable should occupy: `{ DB_URL: 'db_url' }` makes the `DB_URL` variable land on the literal key `db_url`. Despite the name it is not a key→value map. The destination is used as-is: no prefix stripping and no `__` splitting (it is lowercased like everything else).
 - **`env`**. The env snapshot, defaulting to `process.env`. Pass `{}` to isolate from ambient variables, or hand in a map in tests and on Edge.
 - **`expand`** (default `true`). `$VAR` expansion after merging. `false` leaves every string exactly as written.
 - **`allowUnresolved`** (default `false`). `true` keeps `${MISSING}` literally instead of throwing `E_UNRESOLVED`.
 - **`expandSecrets`** (default `false`). Vault-provided values skip expansion unless you set this. Secrets containing `$` (passwords, connection strings) shouldn't be reinterpreted by default.
 - **`coerce`** (default `true`). Best-effort leaf coercion before validation. It never throws; when nothing matches, the string passes through and the schema decides.
-- **`arrayStrategy`** (default `'replace'`). How arrays merge across layers. `replace` takes the later array wholesale (so shrinking works), `concat` appends, `mergeIndex` unions per index.
+- **`arrayStrategy`** (default `'replace'`). How arrays merge across layers. `replace` takes the later array wholesale (so shrinking works), `concat` appends, `mergeIndex` unions per index: later source wins at each overlapping position and the longer tail survives, so `[1,2]` merged over `[3]` yields `[3,2]`.
 - **`unknownKeys`** (default `'strip'`). `preserve` deep-merges undeclared input keys into the result; `reject` throws `E_UNKNOWN_KEY` listing every extra leaf path.
 - **`freeze`** (default `true`). Deep-freezes the result. Set `false` if you need a live object.
 - **`timeoutMs`** (default `5000`). Only meaningful for `settingsAsync`: provider loads and async validation race against it and surface `E_TIMEOUT`. Sync `settings()` ignores it.
@@ -93,7 +93,7 @@ settings({ schema, sources: [{ map: { APP_PORT: '1' } }], prefix: 'APP_' });
 Matching doesn't need a segment boundary, just a non-empty remainder. With `prefix: 'APP'`, `APPLE` becomes `le`. Slightly surprising the first time, completely consistent after.
 
 ```ts
-// FOO keeps its double underscore instead of nesting:
+// FOO's value lands on the literal key `a__b` verbatim (no `__` nesting):
 expandKeys({ FOO: 'v' }, { envMap: { FOO: 'a__b' } }); // { a__b: 'v' }
 ```
 
@@ -105,3 +105,12 @@ withOverrides({ PORT: '1' }, () => settings({ schema })); // patch process.env, 
 pickPublic(cfg, ['port']);          // explicit subset; missing keys are skipped, not set to undefined
 viteSettings({ schema }, import.meta.env); // map-only settings, see frameworks.md
 ```
+
+File helpers from `typed-settings/node` (note the shapes — they differ more than their names suggest):
+
+| Helper | Takes | Returns |
+|---|---|---|
+| `loadEnvFiles(paths)` | file paths | `{ text }` (contents joined with `\n`; missing files skipped) — pass to `{ text }` |
+| `parseEnvFile(path)` | one file **path** (not contents) | a parsed flat map; missing file reads as `{}` |
+| `loadSecretsDir(dir)` | a directory path | a flat map, one key per file |
+| `watchSettings(opts, cb)` | options + callbacks | a handle: `get()`, `reload()`, `dispose()`, `version` |

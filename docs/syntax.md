@@ -85,7 +85,7 @@ How arrays merge *across* layers is `arrayStrategy`:
 |---|---|
 | `replace` (default) | The later array wins wholesale, which is also how you shrink one |
 | `concat` | The arrays concatenate |
-| `mergeIndex` | Per-index deep union; holes throw `E_SPARSE_ARRAY`, past 1024 throws `E_ARRAY_CAP` |
+| `mergeIndex` | Per-index deep union, later source wins at each index and the longer tail survives (`[1,2]` + `[3]` becomes `[3,2]`); holes throw `E_SPARSE_ARRAY`, past 1024 throws `E_ARRAY_CAP` |
 
 ## Unknown keys
 

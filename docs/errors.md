@@ -38,7 +38,7 @@ try {
 | `E_ARRAY_CAP` | over 1024 indexed elements | restructure the data |
 | `E_NO_FS` | a file source under ESM without `typed-settings/node` | import it, or use `{ text }`/`{ map }` |
 | `E_FILE_TOO_LARGE` | a file over `maxBytes` | raise the cap or shrink the file |
-| `USE_ASYNC` | async provider or schema met sync `settings()` | switch to `settingsAsync()` |
+| `USE_ASYNC` | async provider or schema met sync `settings()` | switch to `settingsAsync()`. Branch on `error.code`, never on the message text |
 | `E_TIMEOUT` | a provider or async validation outran `timeoutMs` | raise it, or fix the backend |
 | `E_PROVIDER` | a provider threw a plain error | read the wrapped message |
 | `E_DENIED` | HTTP 401/403 from a secret backend | fix credentials. Fails closed; no partial values |

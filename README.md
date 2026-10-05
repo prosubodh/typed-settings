@@ -185,7 +185,7 @@ Provider details: [docs/vault.md](docs/vault.md).
 | `schema` | Standard Schema | required | zod / valibot / arktype object, or a legacy bridge. An async `validate()` forces `settingsAsync()` |
 | `sources` | array | `['.env', 'env']` | layers in priority order, later wins |
 | `prefix` | `string` | - | global prefix strip, case-insensitive, once |
-| `envMap` | object | - | keys used literally: no prefix strip, no `__` splitting |
+| `envMap` | object | `{}` | maps an env key to the literal key it should occupy (used as-is: no strip/split) |
 | `env` | object | `process.env` | the env snapshot. Pass `{}` to isolate, or a map in tests/on Edge |
 | `expand` | `boolean` | `true` | `$VAR` expansion after merging. `false` leaves literals alone |
 | `allowUnresolved` | `boolean` | `false` | `true` keeps `${MISSING}` as-is instead of throwing |
@@ -279,7 +279,7 @@ Things people actually hit, in rough order of frequency:
 
 - **`USE_ASYNC: provider is async`.** One of your providers (or the schema itself) is async. Switch to `settingsAsync()`.
 - **`E_UNRESOLVED: FOO missing`.** A `$FOO` reference points at nothing. Set the variable, give it a default (`${FOO:-fallback}`), or pass `allowUnresolved: true` to leave it literal.
-- **Schema rejects everything.** Keys are lowercased during load, so schemas need lowercase keys. `port`, not `PORT`.
+- **Schema rejects everything.** Keys are lowercased during load, so schemas need lowercase keys (`port`, not `PORT`). The failure mode is sneaky: `z.object({ PORT: z.coerce.number() })` never matches the lowercased input, so it validates `undefined`, and `z.coerce.number()` turns that into `NaN` — you get the confusing "expected number, received NaN".
 - **`E_NO_FS` under ESM.** Core can't reach `node:fs` on its own. Import `typed-settings/node` once, or stick to `{ text }` / `{ map }` sources.
 - **`E_UNKNOWN_KEY`.** Extra keys with `unknownKeys: 'reject'` (the CLI calls this `--strict`). Either drop the keys or switch to `strip` / `preserve`.
 - **`SCHEMA_LOAD_ERROR`.** The CLI can't find your schema. Export it under the name `schema`, or point at it with `--schema-export NAME`.
