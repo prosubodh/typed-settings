@@ -280,6 +280,8 @@ Things people actually hit, in rough order of frequency:
 - **`USE_ASYNC: provider is async`.** One of your providers (or the schema itself) is async. Switch to `settingsAsync()`.
 - **`E_UNRESOLVED: FOO missing`.** A `$FOO` reference points at nothing. Set the variable, give it a default (`${FOO:-fallback}`), or pass `allowUnresolved: true` to leave it literal.
 - **Schema rejects everything.** Keys are lowercased during load, so schemas need lowercase keys (`port`, not `PORT`). The failure mode is sneaky: `z.object({ PORT: z.coerce.number() })` never matches the lowercased input, so it validates `undefined`, and `z.coerce.number()` turns that into `NaN` — you get the confusing "expected number, received NaN".
+- **Everything is silently empty or wrong.** Most often a global `prefix` ate your keys: matching applies to every source, so `prefix: 'APP_'` drops a YAML key like `port:` and a secrets-dir entry like `API_TOKEN` without a word. Scope it per source, or skip it and bridge env names via `envMap`.
+- **Deno (JSR) refuses a fresh release.** Deno's minimum-dependency-age policy blocks versions published within ~24h. For local dev, run with `--minimum-dependency-age=0`.
 - **`E_NO_FS` under ESM.** Core can't reach `node:fs` on its own. Import `typed-settings/node` once, or stick to `{ text }` / `{ map }` sources.
 - **`E_UNKNOWN_KEY`.** Extra keys with `unknownKeys: 'reject'` (the CLI calls this `--strict`). Either drop the keys or switch to `strip` / `preserve`.
 - **`SCHEMA_LOAD_ERROR`.** The CLI can't find your schema. Export it under the name `schema`, or point at it with `--schema-export NAME`.

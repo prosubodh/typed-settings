@@ -19,8 +19,9 @@ export function stripPrefix(key: string, prefix?: string): string | null {
 /**
  * Expands flat `UPPER__NESTED` keys into nested objects. Only `__` splits;
  * keys lowercase; `envMap` entries stay literal. Throws `E_PROTO` on forbidden
- * segments, `E_EMPTY_SEGMENT` on empties, `E_ARRAY_MIX` on same-layer
- * scalar/indexed/named mixing.
+ * segments and `E_ARRAY_MIX` on same-layer scalar/indexed/named mixing. Keys
+ * whose `__` separators don't split into all-non-empty segments (e.g. Next.js's
+ * `__NEXT_*`) are kept as literal top-level keys instead of throwing.
  */
 export function expandKeys(
   flat: Record<string, unknown>,
@@ -60,17 +61,15 @@ export function expandKeys(
     const stripped = stripPrefix(rawKey, opts?.prefix);
     if (stripped === null) continue;
     const useKey = stripped;
-    if (useKey.includes('__')) {
-      // Whole-key check first: '__proto__' splits into empties that would
-      // otherwise report E_EMPTY_SEGMENT and hide the real problem.
-      if (FORBIDDEN.has(useKey.toLowerCase())) throw new ConfigError([{ path: rawKey, from: 'keys', message: 'E_PROTO: forbidden key' }], 'E_PROTO');
-      const parts = useKey.split('__');
+    // Whole-key E_PROTO check first (case-insensitive): '__proto__' splits into
+    // empties that would otherwise hide the real problem.
+    if (FORBIDDEN.has(useKey.toLowerCase())) throw new ConfigError([{ path: rawKey, from: 'keys', message: 'E_PROTO: forbidden key' }], 'E_PROTO');
+    const parts = useKey.split('__');
+    const cleanSplit = parts.length > 1 && parts.every((p) => p !== '');
+    if (cleanSplit) {
       for (const p of parts) {
-        // Forbidden first (case-insensitive: keys are lowercased below, so
-        // `__PROTO__` would otherwise bypass and pollute on assign) — an
-        // '__proto__' key splits into empties that must not mask E_PROTO.
+        // Forbidden segments, case-insensitive: keys are lowercased below.
         if (FORBIDDEN.has(p.toLowerCase())) throw new ConfigError([{ path: rawKey, from: 'keys', message: 'E_PROTO: forbidden key' }], 'E_PROTO');
-        if (!p) throw new ConfigError([{ path: rawKey, from: 'keys', message: 'E_EMPTY_SEGMENT' }], 'E_EMPTY_SEGMENT');
       }
       const lowered = parts.map((p) => p.toLowerCase());
       const top = lowered[0]!;
@@ -102,7 +101,8 @@ export function expandKeys(
       setPath(out, lowered, value);
     } else {
       const k = useKey.toLowerCase();
-      if (FORBIDDEN.has(k)) throw new ConfigError([{ path: rawKey, from: 'keys', message: 'E_PROTO' }], 'E_PROTO');
+      // No E_PROTO check here: the whole-key check above already rejected every
+      // forbidden key (k === useKey.toLowerCase()), split or not.
       const kind = kindOf(k);
       if (kind.indexed) {
         throw new ConfigError(

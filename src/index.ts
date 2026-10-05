@@ -499,7 +499,17 @@ function expandDeepStrings(
 ): unknown {
   if (typeof obj === 'string') {
     const top = (path[0] ?? '<root>').toLowerCase();
-    return expandLeaf(obj, lookup, { ...ctx, from: ctx.fromMap.get(top) ?? 'config' }, path.map((p) => p.toLowerCase()));
+    const from = ctx.fromMap.get(top) ?? 'config';
+    try {
+      return expandLeaf(obj, lookup, { ...ctx, from }, path.map((p) => p.toLowerCase()));
+    } catch (e) {
+      // Ambient process.env values regularly contain literal `$` (shell prompts like
+      // `$P`, build scripts). They must never decide whether your config loads, so
+      // env-layer strings degrade to the raw literal on any expansion failure.
+      // Values from files/maps/text/providers keep the strict error contract.
+      if (from === 'env') return obj;
+      throw e;
+    }
   }
   if (Array.isArray(obj)) return obj.map((x, i) => expandDeepStrings(x, lookup, ctx, [...path, String(i)]));
   if (obj && typeof obj === 'object') {

@@ -10,12 +10,20 @@ import { ConfigError } from '../src/errors.js';
 
 describe('break: expandKeys', () => {
   it('forbidden segments match case-insensitively (no __PROTO__ bypass)', () => {
-    for (const key of ['A__CONSTRUCTOR__B', 'A____PROTO____B', '__PROTO__', 'X__Prototype__Y']) {
-      // '__PROTO__' with 4+ underscores splits into empty segments -> E_EMPTY_SEGMENT;
-      // all must throw something, never silently assign.
+    for (const key of ['A__CONSTRUCTOR__B', '__PROTO__', 'X__Prototype__Y']) {
       expect(() => expandKeys({ [key]: '1' }), key).toThrow(ConfigError);
     }
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('messy separators degrade to literal keys (Next.js `__NEXT_*` safe)', () => {
+    // Interior empty segment, leading, trailing — none of these crash the load;
+    // they become literal top-level keys ( Next injects vars shaped like these).
+    expect(expandKeys({ A____B: '1' })).toEqual({ a____b: '1' });
+    expect(expandKeys({ __NEXT_FOO: '1' })).toEqual({ __next_foo: '1' });
+    expect(expandKeys({ TRAIL__: '1' })).toEqual({ trail__: '1' });
+    // ...and the literal fallback can never smuggle a forbidden key into a split path:
+    expect(expandKeys({ A____PROTO____B: '1' })).toEqual({ a____proto____b: '1' });
   });
 
   it('indexed + named siblings in one layer throw E_ARRAY_MIX both orders', () => {
@@ -42,7 +50,8 @@ describe('break: expandKeys', () => {
   });
 
   it('empty segments and invalid keys', () => {
-    expect(() => expandKeys({ A____B: '1' })).toThrow(/E_EMPTY_SEGMENT/);
+    // No more E_EMPTY_SEGMENT crash: messy separators degrade to literal keys.
+    expect(expandKeys({ A____B: '1' })).toEqual({ a____b: '1' });
     expect(expandKeys({ 'HAS-DASH': '1', HAS_SPACE: '1' })).toEqual({ has_space: '1' });
     expect(() => expandKeys({ CONSTRUCTOR: '1' })).toThrow(/E_PROTO/);
     // NOTE: `{__proto__: '1'}` as a JS literal sets the prototype, not an own key —

@@ -27,7 +27,7 @@ Going field by field:
 
 - **`schema`** (required). A Standard Schema object. If its `validate()` returns a promise, sync `settings()` throws `USE_ASYNC` and you need `settingsAsync()`.
 - **`sources`** (default `['.env', 'env']`). Ordered layers, later wins per leaf. Details below.
-- **`prefix`**. Strips case-insensitively and exactly once; whatever's left must be non-empty. A per-source `prefix` replaces the global one for that source, it doesn't stack with it.
+- **`prefix`**. Strips case-insensitively and exactly once; whatever's left must be non-empty. A per-source `prefix` replaces the global one for that source, it doesn't stack with it. **Sharp edge:** matching happens for every source, so a key that doesn't start with the prefix is silently dropped — including lowercase YAML keys (`port: 3000` dies under `prefix: 'APP_'`), secrets-dir files, and `{ map }` entries. If only your env vars carry the prefix, skip the global option and bridge names with `envMap` instead (`{ APP_PORT: 'port' }`).
 - **`envMap`**. Escape hatch for awkward keys. Maps an env key to the literal key that variable should occupy: `{ DB_URL: 'db_url' }` makes the `DB_URL` variable land on the literal key `db_url`. Despite the name it is not a key→value map. The destination is used as-is: no prefix stripping and no `__` splitting (it is lowercased like everything else).
 - **`env`**. The env snapshot, defaulting to `process.env`. Pass `{}` to isolate from ambient variables, or hand in a map in tests and on Edge.
 - **`expand`** (default `true`). `$VAR` expansion after merging. `false` leaves every string exactly as written.
@@ -84,6 +84,8 @@ So `{ map: { DB__HOST: 'x' } }` combined with a `c.json` holding `{ "db": { "por
 When validation fails, each issue names the winning layer in `from`: `'env'`, the filename, the provider name, `'overrides'`, or `'defaults'`/`'schema'` when nothing provided the key. That's usually enough to find the offending file.
 
 ## Prefix and envMap
+
+`prefix` runs first and drops non-matching keys on *every* source — which is why `envMap` is the gentler tool when only env vars carry the prefix. Destinations of `envMap` skip prefix-stripping (and the `__` split) entirely, so they survive regardless.
 
 ```ts
 settings({ schema, sources: [{ map: { APP_PORT: '1' } }], prefix: 'APP_' });

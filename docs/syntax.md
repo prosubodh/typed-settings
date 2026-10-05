@@ -32,7 +32,7 @@ single_word        ->  single_word     (untouched)
 
 Keys with characters outside `[A-Za-z0-9_]` are ignored. Empty segments (`A____B`) throw `E_EMPTY_SEGMENT`. And `__proto__` / `constructor` / `prototype` throw `E_PROTO`, matched case-insensitively. Prototype pollution is a hard error here, never something that slips through quietly.
 
-Structured files (JSON/YAML/TOML) don't go through any of this: their nesting is native and their case is preserved. Only their top-level keys take the global `prefix`.
+Structured files (JSON/YAML/TOML) don't go through any of this: their nesting is native and their case is preserved. Only their top-level keys take the global `prefix`, and a non-matching one is dropped, not kept.
 
 ## Expansion
 
@@ -51,6 +51,8 @@ CHAIN=${URL}                    # chains resolve transitively
 Defaults can nest (`${A:-${B:-z}}`), and `\}` escapes a brace inside one. The `:=`, `:?`, and `:+` operators don't exist here; reaching for them gives `E_BAD_OP`. A name with no value and no default throws `E_UNRESOLVED`, unless `allowUnresolved: true` keeps the literal text. Variables referencing each other in a circle throw `E_CIRCULAR` instead of hanging.
 
 Vault values skip expansion by default. Passwords and connection strings are full of `$` characters that mean nothing, so you have to ask for it with `expandSecrets: true`.
+
+One robustness rule: values from the ambient `'env'` layer never throw at expansion time. A process.env value with an unresolved reference (`${P}`), a bash-style `${A:=x}`, or a self-reference passes through untouched. Strict errors (`E_UNRESOLVED`, `E_CIRCULAR`, `E_BAD_OP`) apply only to values from files, `{ text }`, `{ map }`, structured files, and providers.
 
 ## Coercion
 
