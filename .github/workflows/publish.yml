@@ -34,22 +34,28 @@ jobs:
       - run: npm ci
       - run: npx jsr publish
 
-  publish-npm:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # provenance attestation
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm run build
-      # npm latest will jump from 0.1.1 to this version (0.1.2/0.1.3 were JSR-only, docs/code).
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  # npm publishing is parked while GitHub Actions is degraded: the runner queue
+  # stalled every release-triggered run, and 0.1.4 needs to reach JSR.
+  # To restore it: uncomment this block and drop this note. The token is already
+  # in repo settings as NPM_TOKEN. Re-runs are safe: both registries reject a
+  # version that already exists rather than overwriting it.
+  #
+  # publish-npm:
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #     id-token: write # provenance attestation
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ github.event.release.tag_name || github.ref }}
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 24
+  #         registry-url: 'https://registry.npmjs.org'
+  #     - run: npm ci
+  #     - run: npm run build
+  #     # npm latest jumps from 0.1.1 straight to this version.
+  #     - run: npm publish --provenance --access public
+  #       env:
+  #         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
