@@ -5,6 +5,10 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 type AnySchema = { validateSync?: (v: unknown, o?: unknown) => unknown; validate?: (...a: never[]) => unknown };
 
+/**
+ * Adapts a Yup schema via `validateSync` (`stripUnknown`, all errors).
+ * `inner[]` failures map to issues; anything else becomes a root issue.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function yupAdapter(schema: any): StandardSchemaV1 {
   return {
@@ -27,6 +31,11 @@ export function yupAdapter(schema: any): StandardSchemaV1 {
   } as StandardSchemaV1;
 }
 
+/**
+ * Adapts a Joi schema (`validate` with convert + stripUnknown). `details[]`
+ * map to issues; a throwing `validate()` or empty details still yields a
+ * non-empty issues array, as Standard Schema requires.
+ */
 export function joiAdapter(schema: AnySchema & { validate?: (v: unknown, o?: unknown) => { error?: { message?: string; details?: { path: (string|number)[]; message: string }[] }; value: unknown } }): StandardSchemaV1 {
   return {
     '~standard': {
@@ -51,6 +60,10 @@ export function joiAdapter(schema: AnySchema & { validate?: (v: unknown, o?: unk
   } as StandardSchemaV1;
 }
 
+/**
+ * Adapts a Superstruct struct via `create()`. `failures()` map to issues;
+ * anything else falls back to the thrown message.
+ */
 export function superstructAdapter(schema: AnySchema & { create?: (v: unknown) => unknown }): StandardSchemaV1 {
   return {
     '~standard': {

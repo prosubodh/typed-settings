@@ -1,5 +1,10 @@
 import { parseAllDocuments } from 'yaml';
 
+/**
+ * Single-doc YAML parse (1.2, duplicate keys rejected). A trailing lone `---`
+ * still parses; multi-doc payloads, bad indentation, and unresolvable aliases
+ * throw `ParseError` naming the source. Explicit `null` reads as `{}`.
+ */
 export function parseYamlText(text: string, from = 'yaml'): unknown {
   const stripped = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (!stripped.trim()) return {};

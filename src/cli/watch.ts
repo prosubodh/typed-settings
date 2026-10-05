@@ -2,20 +2,31 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { watchSettings } from '../node.js';
 import { loadSchema } from './load-schema.js';
 
+/** Arguments for {@link runWatch} (mirrors the `watch` CLI flags). */
 export interface WatchArgs {
+  /** Schema file path (required). */
   schema?: string;
+  /** Comma-separated sources. Default `'.env,env'`. */
   config?: string;
   schemaExport?: string;
+  /** `unknownKeys: 'reject'`. */
   strict?: boolean;
+  /** Set false via `--no-expand`. */
   expand?: boolean;
   array?: 'replace' | 'concat' | 'mergeIndex';
   prefix?: string;
+  /** Validate once and exit (0/1/2) instead of supervising. */
   once?: boolean;
+  /** Long-run: exit 1 on the first invalid reload. */
   exitOnError?: boolean;
+  /** Child command after `--`, spawned at startup and restarted per reload. */
   cmd?: string[];
 }
 
-/** Long-running until SIGINT. Exit 0 on dispose, 1 on --exit-on-error failure. */
+/**
+ * Validates once (`--once`) or supervises until SIGINT/SIGTERM. Long-running
+ * until dispose: exit 0 on clean shutdown, 1 on `--exit-on-error` failure.
+ */
 export async function runWatch(args: WatchArgs): Promise<number> {
   if (!args.schema) {
     console.error('Usage: watch -s schema.ts -c base.yaml,.env [-- cmd...]');

@@ -1,6 +1,7 @@
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError } from '../errors.js';
 
+/** Injectable fetch shape, so tests never need a live server. */
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
 function getFetch(fetchFn?: FetchFn): FetchFn {
@@ -30,7 +31,11 @@ function stripSensitiveForCrossHost(headers: Headers): Headers {
   return next;
 }
 
-/** GET with manual redirect (max 2), stripping auth on cross-host. */
+/**
+ * GET with manual redirects (max 2). Crossing hosts strips every auth header
+ * (not just Vault's own); exhaustion or a non-URL `Location` throws `E_REDIRECT`.
+ * Missing `Location` ends the chain and returns the response as-is.
+ */
 export async function fetchWithRedirectGuard(
   url: string,
   init: RequestInit,
@@ -72,6 +77,12 @@ export async function fetchWithRedirectGuard(
   throw new ConfigError([{ path: url, from: 'vault', message: 'E_REDIRECT' }], 'E_REDIRECT');
 }
 
+/**
+ * Coerces a provider payload into a flat map. Non-object roots throw `E_SHAPE`;
+ * `null`/`undefined` values are skipped; nested objects are preserved for `__`
+ * expansion downstream; other values stringify. Trims one trailing newline
+ * unless `trimNewline: false`.
+ */
 export function normalizeSecretMap(raw: unknown, providerName: string, opts?: { trimNewline?: boolean }): Flat {
   const trim = opts?.trimNewline !== false;
   const clean = (v: unknown): string | undefined => {
@@ -100,6 +111,10 @@ export function normalizeSecretMap(raw: unknown, providerName: string, opts?: { 
   return out;
 }
 
+/**
+ * Maps HTTP status to a fail-closed code: 401/403 `E_DENIED`, 404 `E_NOT_FOUND`,
+ * 429 `E_THROTTLED`, 5xx `E_UPSTREAM`, anything else `E_PROVIDER`.
+ */
 export function statusToCode(status: number): string {
   if (status === 403 || status === 401) return 'E_DENIED';
   if (status === 404) return 'E_NOT_FOUND';
@@ -108,5 +123,6 @@ export function statusToCode(status: number): string {
   return 'E_PROVIDER';
 }
 
+/** Resolves the fetch implementation: injected `fetchFn` first, else global `fetch` (`E_NO_FETCH` when neither exists). */
 export { getFetch };
 export type { SecretProvider };

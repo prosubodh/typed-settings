@@ -1,3 +1,11 @@
+/**
+ * Typed config in one call.
+ *
+ * `settings()` / `settingsAsync()` load env, `.env` files, YAML/TOML/JSON,
+ * secrets-dir maps, and vault secrets, then merge, expand `$VAR` references,
+ * coerce, validate against a Standard Schema, and return the result frozen.
+ * Anything invalid throws `ConfigError` at boot with the key and source attached.
+ */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { Flat, SettingsOptions, SourceInput } from './types.js';
 import { ConfigError, redactValue, byteLengthUtf8 } from './errors.js';
@@ -24,6 +32,11 @@ function isSecretKey(key: string): boolean {
   return /key|secret|token|password|private/i.test(key);
 }
 
+/**
+ * Runs `fn` with `process.env` patched by `map` (`undefined` deletes a key),
+ * then restores the exact previous environment — synchronously for sync `fn`,
+ * held until settle for async `fn`. Restores on throw too.
+ */
 export function withOverrides<T>(map: Flat, fn: () => T): T {
   const g = globalThis as { process?: { env?: Flat } };
   const prev = g.process?.env ? { ...g.process.env } : undefined;
@@ -53,6 +66,10 @@ export function withOverrides<T>(map: Flat, fn: () => T): T {
   return out;
 }
 
+/**
+ * Copies only the listed, actually-present keys. A missing key yields no entry
+ * (not `{ k: undefined }`), and nothing is spread, so secrets can't leak through.
+ */
 export function pickPublic<T extends object>(cfg: T, keys: (keyof T)[]): Partial<T> {
   const out: Partial<T> = {};
   // Only copy keys actually present — no `undefined` placeholders, no spread.
@@ -60,6 +77,11 @@ export function pickPublic<T extends object>(cfg: T, keys: (keyof T)[]): Partial
   return out;
 }
 
+/**
+ * Map-only settings for Vite-style `import.meta.env` objects: validates the
+ * map with no filesystem and no ambient env. (The framework entry's overload
+ * drops `sources`/`env` from the options.)
+ */
 export function viteSettings<S extends StandardSchemaV1>(
   opts: SettingsOptions<S>,
   metaEnv: Flat,
@@ -569,6 +591,12 @@ function freezeDeep<T>(v: T): T {
   return v;
 }
 
+/**
+ * Loads, merges, expands, coerces, and validates config synchronously, returning
+ * the inferred output type, frozen. Throws `ConfigError` on invalid input (issues
+ * carry `path` + winning-source `from`, secrets redacted) and `USE_ASYNC` when a
+ * provider or the schema itself is async — then use `settingsAsync()`.
+ */
 export function settings<S extends StandardSchemaV1>(opts: SettingsOptions<S>): StandardSchemaV1.InferOutput<S> {
   const envSnapshot = getEnvSnapshot(opts.env);
   const { input, fromFor } = buildConfigObject(opts as SettingsOptions<StandardSchemaV1>, envSnapshot);
@@ -590,6 +618,11 @@ export function settings<S extends StandardSchemaV1>(opts: SettingsOptions<S>): 
   return (opts.freeze === false ? final : freezeDeep(final)) as StandardSchemaV1.InferOutput<S>;
 }
 
+/**
+ * Async twin of `settings()`: awaits async providers (whole collection races
+ * `timeoutMs`) and async schemas, with the same merge/expand/coerce/validate/
+ * freeze pipeline and the same `ConfigError` contract.
+ */
 export async function settingsAsync<S extends StandardSchemaV1>(
   opts: SettingsOptions<S>,
 ): Promise<StandardSchemaV1.InferOutput<S>> {

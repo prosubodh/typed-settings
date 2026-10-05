@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
+/** Validation outcome with root-attributed, path-normalized issues. */
 export interface NormalizedResult {
   ok: boolean;
   value?: unknown;
@@ -19,6 +20,12 @@ function normalizePath(path: StandardSchemaV1.PathSegment[] | readonly unknown[]
   return parts.join('.');
 }
 
+/**
+ * Runs a Standard Schema `validate()` and normalizes the outcome. Sync results
+ * return `{ value }` or `{ issues, async: false }`; a thenable (checked by shape,
+ * not `instanceof`) returns `{ promise }` for the async path. Throwing validators
+ * become root issues instead of leaking.
+ */
 export function validateStandard<S extends StandardSchemaV1>(
   schema: S,
   input: unknown,

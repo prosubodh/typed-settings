@@ -5,6 +5,12 @@ import { ConfigError } from './errors.js';
 
 const NAME_RE = '[A-Za-z_][A-Za-z0-9_]*';
 
+/**
+ * Expands `$VAR` / `${VAR}` / `${VAR:-default}` / `${VAR-default}` in one string,
+ * single pass. `$$` and `\$` stay literal, defaults recurse, and only `:-`
+ * and `-` operators exist (`E_BAD_OP` otherwise). Unknown names throw
+ * `E_UNRESOLVED` unless `allowUnresolved` keeps them verbatim.
+ */
 export function expandValue(
   input: string,
   lookup: (name: string) => string | undefined,

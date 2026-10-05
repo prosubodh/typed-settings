@@ -2,6 +2,11 @@
 // Supports: `export ` prefix strip (one), first `=`, `#` comment only when
 // preceded by whitespace outside quotes, `''` literal / `""` with \n + multiline.
 
+/**
+ * Parses dotenv text into a flat map. Strips one BOM, joins multiline
+ * double-quoted values, lets the last duplicate win. Throws `ParseError` on
+ * backticks, unterminated quotes, bare keys, and empty keys.
+ */
 export function parseEnvText(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   // Strip single BOM

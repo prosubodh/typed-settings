@@ -1,7 +1,13 @@
+/**
+ * AWS provider: Secrets Manager ids plus SSM parameters (with decryption)
+ * merged into one flat map. SDK clients are injected, never imported blindly,
+ * so tests can pass fakes and Edge bundles stay lean.
+ */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';
 import { normalizeSecretMap } from './shared.js';
 
+/** Minimal Secrets Manager surface this provider needs (real SDK client or a fake). */
 export interface AwsSecretsClient {
   getSecretValue(secretId: string): Promise<
     | { SecretString?: string; SecretBinary?: Uint8Array | string }
@@ -9,19 +15,30 @@ export interface AwsSecretsClient {
   >;
 }
 
+/** Minimal SSM surface this provider needs (real SDK client or a fake). */
 export interface AwsSsmClient {
   getParameters(names: string[], withDecryption?: boolean): Promise<Record<string, string>>;
 }
 
+/** Options for {@link awsProvider}. */
 export interface AwsProviderOptions {
+  /** Secrets Manager ids. */
   secrets?: string[]; // Secrets Manager ids
+  /** SSM names or path prefixes (trailing `/` optional). */
   params?: string[]; // SSM paths (exact names or path prefixes ending in /)
+  /** Reserved: region override (currently from env `AWS_REGION`). */
   region?: string; // from env AWS_REGION if omitted
+  /** Reserved: VersionId / stage pin. */
   versionId?: string; // pin VersionId / stage
+  /** Applies to the whole `load()`. Default 5000. */
   timeoutMs?: number; // default 5000 (applies to load())
+  /** Injected Secrets Manager client (or test fake); missing throws `E_NO_SDK`. */
   secretsClient?: AwsSecretsClient; // injectable (tests); else dynamic SDK import
+  /** Injected SSM client (or test fake); missing throws `E_NO_SDK`. */
   ssmClient?: AwsSsmClient;
+  /** Secrets Manager value cap in bytes. Default 64 KiB. */
   maxBytesSecret?: number; // default 64kb (SM cap)
+  /** SSM value cap in bytes. Default 8 KiB. */
   maxBytesParam?: number; // default 8kb (SSM cap)
 }
 
@@ -70,6 +87,11 @@ function decodeBinary(b: Uint8Array | string, path: string, from: string): strin
   return Buffer.from(b).toString('utf8');
 }
 
+/**
+ * Merges Secrets Manager values (JSON objects merge, scalars key on the last id
+ * segment) with SSM parameters (longest-prefix strip, `/` to `__`, uppercased).
+ * Concurrent `load()` calls share one in-flight request.
+ */
 export function awsProvider(opts: AwsProviderOptions): SecretProvider {
   const name = `aws://${(opts.secrets ?? []).join(',')}${(opts.params ?? []).join(',') || 'ssm'}`;
   const timeoutMs = opts.timeoutMs ?? 5000;

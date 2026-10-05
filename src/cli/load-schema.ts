@@ -1,6 +1,13 @@
 import { resolve } from 'node:path';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
+/**
+ * Loads a schema file through jiti (plain `.ts` works). Resolution: explicit
+ * `exportName` first (must resolve to a schema — typos fail loudly, no
+ * fallthrough), then `schema` → `settingsSchema` → `default` → first export
+ * implementing `~standard` (ArkType function schemas included). Anything else
+ * throws `SCHEMA_LOAD_ERROR`.
+ */
 export async function loadSchema(schemaPath: string, exportName?: string): Promise<StandardSchemaV1> {
   const abs = resolve(schemaPath);
   let mod: Record<string, unknown>;

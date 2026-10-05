@@ -1,18 +1,20 @@
-// Vite binding (Edge-safe, no `fs`).
-// Usage in app code (NOT here — keeps this entry CJS-safe):
-//   import { viteSettings } from 'typed-settings/vite';
-//   export const cfg = viteSettings({ schema }, import.meta.env);
-//
-// Rules: never spread `import.meta.env` (forbid `...import.meta.env` —
-// it drags server secrets into the client bundle). Pass it as a map;
-// file preloading belongs in `vite.config.ts` via `loadEnvFiles()` passed as `{ text }`.
+/**
+ * Vite binding (Edge-safe, no `fs`). Validates `import.meta.env` against a schema.
+ *
+ * Rules: never spread `import.meta.env` (it drags server secrets into the
+ * client bundle). Pass it as a map; file preloading belongs in `vite.config.ts`
+ * via `loadEnvFiles()` passed as `{ text }`.
+ */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { settings, settingsAsync, ConfigError, pickPublic } from '../index.js';
 import type { Flat, SettingsOptions } from '../types.js';
 
 export { settings, settingsAsync, ConfigError, pickPublic };
 
-/** Validate `import.meta.env` (passed explicitly by the caller) against a schema. */
+/**
+ * Validates `import.meta.env` (passed explicitly by the caller) against a schema.
+ * Sources and ambient env are fixed: the map is the only input.
+ */
 export function viteSettings<S extends StandardSchemaV1>(
   opts: Omit<SettingsOptions<S>, 'sources' | 'env'>,
   metaEnv: Flat,

@@ -1,12 +1,19 @@
 import { mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 
+/** Arguments for {@link runInit} (mirrors the `init` CLI flags). */
 export interface InitArgs {
+  /** Validator flavor. Default `'zod'`. */
   lib?: 'zod' | 'valibot' | 'arktype' | 'yup' | 'joi';
+  /** Example file flavor. Default `'env'`. */
   format?: 'yaml' | 'toml' | 'env';
+  /** Target directory. Default `'.'`. */
   dir?: string;
+  /** Overwrite existing files. */
   force?: boolean;
+  /** Print what would change, write nothing. */
   dryRun?: boolean;
+  /** Fail (exit 2) if files would change. */
   check?: boolean; // --check: fail if files would change
 }
 
@@ -58,7 +65,11 @@ const CONFIG_TPL: Record<string, string> = {
   toml: '# config.toml\nport = 3000\n',
 };
 
-/** Exit 0 ok / 2 on error (or --check diff). */
+/**
+ * Scaffolds `src/settings.ts` plus an example file (0600). `--dry-run`/`--check`
+ * only report `create|exists|overwrite`; `--check` exits 2 on drift. Plain runs
+ * skip up-to-date or existing files unless `--force`. Exit 0 ok, 2 on error.
+ */
 export async function runInit(args: InitArgs): Promise<number> {
   const lib = args.lib ?? 'zod';
   const format = args.format ?? 'env';

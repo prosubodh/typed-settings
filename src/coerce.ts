@@ -1,6 +1,11 @@
 // Best-effort leaf coercion. Final authority is the schema.
 // Never throws; returns input unchanged when no rule matches.
 
+/**
+ * Coerces one env string to a boolean, number, null, JSON value, or string
+ * list. Non-strings and empty strings pass through; unsafe integers, hex,
+ * and `NaN`/`Infinity` stay strings.
+ */
 export function tryParseEnvValue(input: unknown): unknown {
   return tryParse(input, true);
 }
@@ -96,6 +101,7 @@ function splitCsv(s: string): string[] | null {
   });
 }
 
+/** Applies `tryParseEnvValue` to every string leaf, recursing arrays and objects. */
 export function coerceDeep(value: unknown): unknown {
   if (typeof value === 'string') return tryParseEnvValue(value);
   if (Array.isArray(value)) return value.map(coerceDeep);

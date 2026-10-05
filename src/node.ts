@@ -1,3 +1,9 @@
+/**
+ * Node.js entry: dotenv file loading, secrets-dir reading, and file watching.
+ *
+ * Importing this module installs the file-read hook that core uses under ESM.
+ * Edge bundlers should skip it entirely and pass `{ text }` / `{ map }` sources.
+ */
 import { readFileSync, readdirSync, statSync, watch } from 'node:fs';
 import type { FSWatcher } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -13,6 +19,10 @@ import { ConfigError } from './errors.js';
   readFileSync: (p: string, e: string) => readFileSync(p, e as BufferEncoding),
 };
 
+/**
+ * Reads dotenv files and joins them with newlines for `{ text }` sources.
+ * Missing files are skipped; anything else (e.g. `EACCES`) rethrows.
+ */
 export function loadEnvFiles(paths: string[]): { text: string } {
   const parts: string[] = [];
   for (const p of paths) {
@@ -27,6 +37,12 @@ export function loadEnvFiles(paths: string[]): { text: string } {
   return { text: parts.join('\n') };
 }
 
+/**
+ * Reads a secrets dir (Docker/K8s `/run/secrets`) into a flat map keyed by
+ * uppercased filenames. Skips subdirectories, `..*` entries, and empties; strips
+ * one trailing newline but otherwise preserves whitespace verbatim. Missing dir
+ * reads as `{}`; unreadable files throw (`EACCES` fails closed).
+ */
 export function loadSecretsDir(dir: string): Flat {
   const out: Flat = {};
   let entries: string[];
@@ -64,6 +80,10 @@ export function loadSecretsDir(dir: string): Flat {
   return out;
 }
 
+/**
+ * Parses one dotenv file into a flat map. Missing file reads as `{}`;
+ * anything else (including `EACCES` and syntax errors) rethrows.
+ */
 export function parseEnvFile(path: string): Flat {
   try {
     const text = readFileSync(path, 'utf8');
@@ -75,14 +95,21 @@ export function parseEnvFile(path: string): Flat {
   }
 }
 
+/** Watch tuning: debounce, provider/dir refresh, stat-poll fallback, and callbacks. */
 export interface WatchCallbacks {
+  /** Coalesce rapid saves. Default 100. */
   debounceMs?: number; // default 100
+  /** Re-poll providers/secrets-dirs. Default 0=off (60000 when providers present). */
   refreshMs?: number; // poll providers/secrets-dir, default 0=off (60000 if providers present)
+  /** Stat-poll fallback for NFS/Docker where fs events are unreliable. Default 0=off. */
   pollMs?: number; // fallback stat poll for NFS/Docker, default 0=off
+  /** Fires on each successful reload with the new config and changed leaf paths. */
   onUpdate?: (cfg: unknown, changed: string[]) => void;
+  /** Fires when a reload fails; the old config stays live. Never throws outward. */
   onError?: (e: ConfigError | Error, info?: { version: number }) => void;
 }
 
+/** Live config subscription. `reload()` re-reads now; `dispose()` is idempotent. */
 export interface WatchHandle<T = unknown> {
   get(): T;
   reload(): Promise<void>;
@@ -165,6 +192,12 @@ async function stableSize(path: string, retries = 3): Promise<void> {
   }
 }
 
+/**
+ * Subscribes to config files with parent-dir watching (survives atomic renames),
+ * debounced reloads, and stable-size settling. Each reload validates off-side and
+ * swaps only on success, reporting changed leaf paths; failures keep the old
+ * config and notify `onError`. Overlapping reloads drop the stale one.
+ */
 export function watchSettings<S extends StandardSchemaV1>(
   opts: SettingsOptions<S>,
   cb: WatchCallbacks = {},

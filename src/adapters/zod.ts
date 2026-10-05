@@ -1,3 +1,7 @@
+/**
+ * Zod helpers: `withPrefix` scopes any Standard Schema under an env prefix,
+ * `coerceEnv` is the identity hook for composed pipelines.
+ */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // withPrefix: scoped prefix helper. Strips `prefix` from flat input keys before
@@ -5,6 +9,11 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 // M1 implementation: wraps a schema's validate to pre-strip prefixed keys from
 // flat objects. Works when input is flat (env-style).
 
+/**
+ * Scopes a schema under `prefix`: matching keys strip case-insensitively before
+ * validation, prefixed keys win collisions, non-objects pass through untouched.
+ * An empty prefix returns the schema unchanged.
+ */
 export function withPrefix<S extends StandardSchemaV1>(schema: S, prefix: string): S {
   // Empty prefix is the identity: every key trivially "matches", so stripping would
   // just lowercase the whole input — return the schema untouched instead.
@@ -37,6 +46,10 @@ export function withPrefix<S extends StandardSchemaV1>(schema: S, prefix: string
   return wrapped as S;
 }
 
+/**
+ * Identity hook for composed pipelines. Documents "this value already went
+ * through env coercion"; the real logic lives in `coerce.ts`.
+ */
 export function coerceEnv(value: unknown): unknown {
   // Re-export helper for docs; actual coercion lives in src/coerce.ts.
   return value;

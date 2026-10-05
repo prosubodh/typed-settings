@@ -1,18 +1,28 @@
 import { settings, ConfigError } from '../index.js';
 import { loadSchema } from './load-schema.js';
 
+/** Arguments for {@link runCheck} (mirrors the `check` CLI flags). */
 export interface CheckArgs {
+  /** Schema file path (required). */
   schema: string;
+  /** Comma-separated sources. Default `'.env,env'`. */
   config?: string; // comma-separated
+  /** `unknownKeys: 'reject'`. */
   strict?: boolean;
+  /** `--no-expand` sets false. */
   expand?: boolean; // --no-expand sets false
   array?: 'replace' | 'concat' | 'mergeIndex';
+  /** `'human'` prints errors, `'json'` prints `{ok, config}` or `{ok:false, ...}`. */
   format?: 'human' | 'json';
+  /** Which export holds the schema. */
   schemaExport?: string;
   prefix?: string;
 }
 
-/** Exit codes: 0 ok / 1 invalid / 2 load-usage. */
+/**
+ * Validates a config against a schema file. Exit codes: 0 valid,
+ * 1 invalid config, 2 schema-load failure or bad flags.
+ */
 export async function runCheck(args: CheckArgs): Promise<number> {
   let schema;
   try {

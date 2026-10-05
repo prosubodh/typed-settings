@@ -1,3 +1,4 @@
+/** One validation failure: the key path, the winning source, and what went wrong. */
 export interface ConfigIssue {
   path: string;
   from: string;
@@ -6,6 +7,11 @@ export interface ConfigIssue {
 
 const SECRET_RE = /key|secret|token|password|private/i;
 
+/**
+ * Renders a value for error messages. Secret-looking keys (`key|secret|token|
+ * password|private`) never leak: short values collapse to `(redacted)`, longer
+ * ones to a `abc-*** (N chars)` shape.
+ */
 export function redactValue(key: string, value: unknown): string {
   if (SECRET_RE.test(key) && typeof value === 'string' && value.length > 0) {
     if (value.length <= 8) return '(redacted)';
@@ -29,6 +35,10 @@ export function byteLengthUtf8(text: string): number {
   return text.length;
 }
 
+/**
+ * Every settings failure. Carries machine-readable `issues` plus a `code`
+ * (`E_INVALID_CONFIG` by default, e.g. `E_UNKNOWN_KEY`, `E_TIMEOUT`).
+ */
 export class ConfigError extends Error {
   code = 'E_INVALID_CONFIG';
   issues: ConfigIssue[];

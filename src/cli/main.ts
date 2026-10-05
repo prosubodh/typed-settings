@@ -5,6 +5,10 @@ import { runInit } from './init.js';
 import { runGen } from './gen.js';
 import { runWatch } from './watch.js';
 
+/**
+ * CLI dispatcher (`check|init|gen|watch`). Returns the process exit code
+ * instead of exiting, so it's testable: 0 ok, 1 invalid, 2 usage/load error.
+ */
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h') {

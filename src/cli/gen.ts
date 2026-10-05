@@ -3,16 +3,25 @@ import { resolve, dirname } from 'node:path';
 import { loadSchema } from './load-schema.js';
 import { describeSchema, toEnvExample, toMarkdownDocs } from './describe.js';
 
+/** Arguments for {@link runGen} (mirrors the `gen` CLI flags). */
 export interface GenArgs {
+  /** Schema file path (required). */
   schema: string;
   schemaExport?: string;
+  /** `.env.example` destination; stdout when omitted. */
   out?: string; // .env.example path
+  /** `CONFIG.md` destination; skipped when omitted (unless nothing prints). */
   docs?: string; // CONFIG.md path
   prefix?: string;
+  /** Overwrite existing `out`/`docs` (default false). */
   force?: boolean; // overwrite existing out/docs (default false)
 }
 
-/** Exit 0 ok / 2 load-error or refusal to overwrite without --force. */
+/**
+ * Generates `.env.example` + `CONFIG.md` from a schema file. Warns
+ * `GEN_BEST_EFFORT` for non-Zod schemas. Exit 0 ok, 2 on load error or
+ * refusal to overwrite without `--force`.
+ */
 export async function runGen(args: GenArgs): Promise<number> {
   let schema;
   try {

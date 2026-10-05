@@ -1,13 +1,24 @@
+/**
+ * Generic HTTP secret provider: GETs a JSON endpoint and reads a dot-path
+ * (`jsonPath`, default `'data'`) into a flat map. Auth rides in `headers`.
+ */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';
 import { fetchWithRedirectGuard, getFetch, normalizeSecretMap, statusToCode, type FetchFn } from './shared.js';
 
+/** Options for {@link httpProvider}. */
 export interface HttpProviderOptions {
+  /** Endpoint URL. */
   url: string;
+  /** Extra headers. Feed auth from env-injected values, never CLI args. */
   headers?: Flat; // auth from env-injected headers, never CLI args for secrets
+  /** Dot path into the JSON body. Default `'data'`; `''` reads the whole body. */
   jsonPath?: string; // dot path, default 'data'
+  /** Request timeout in ms. Default 5000. */
   timeoutMs?: number; // default 5000
+  /** Injectable fetch for tests. */
   fetchFn?: FetchFn;
+  /** Response body cap in bytes. Default 1 MiB. */
   maxBytes?: number; // default 1MiB
 }
 
@@ -21,6 +32,10 @@ function getAtPath(obj: unknown, path: string): unknown {
   return cur;
 }
 
+/**
+ * GETs a JSON endpoint and reads `jsonPath` into a flat map. Concurrent loads
+ * share one in-flight request; failures reset so the next call retries.
+ */
 export function httpProvider(opts: HttpProviderOptions): SecretProvider {
   const timeoutMs = opts.timeoutMs ?? 5000;
   const maxBytes = opts.maxBytes ?? 1024 * 1024;

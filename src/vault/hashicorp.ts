@@ -1,15 +1,29 @@
+/**
+ * HashiCorp Vault provider (KVv1 + KVv2): reads one secret path into a flat map.
+ * Token comes from `auth.token` or `VAULT_TOKEN`; KVv2 envelopes unwrap only
+ * when a `metadata` sibling is present. Fail-closed on 403.
+ */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';
 import { fetchWithRedirectGuard, getFetch, normalizeSecretMap, statusToCode, type FetchFn } from './shared.js';
 
+/** Options for {@link hashicorpProvider}. */
 export interface HashicorpOptions {
+  /** Vault base URL, e.g. `https://vault:8200`. */
   url: string; // e.g. https://vault:8200
+  /** KV mount. Default `'secret'`. */
   mount?: string; // default 'secret'
+  /** Secret path: `data/app/prod` (KVv2) or `app/prod` (KVv1). */
   path: string; // e.g. 'data/app/prod' (KVv2) or 'app/prod' (KVv1)
+  /** Explicit token. `''` means none (no `VAULT_TOKEN` fallback); unset reads `VAULT_TOKEN`. */
   auth?: { token?: string };
+  /** Pinned KVv2 version (`?version=`). */
   version?: number | string; // pinned version (KVv2 ?version=)
+  /** Request timeout in ms. Default 5000. */
   timeoutMs?: number; // default 5000
+  /** Injectable fetch for tests. */
   fetchFn?: FetchFn; // injectable for tests
+  /** Response body cap in bytes. Default 1 MiB. */
   maxBytes?: number; // default 1MiB
 }
 
@@ -21,6 +35,10 @@ function tokenFromEnv(explicit?: string): string | undefined {
   return g.process?.env?.['VAULT_TOKEN'];
 }
 
+/**
+ * Reads one Vault path into a flat map. Concurrent `load()` calls share a
+ * single in-flight request; failures reset so the next call retries.
+ */
 export function hashicorpProvider(opts: HashicorpOptions): SecretProvider {
   const mount = (opts.mount ?? 'secret').replace(/^\/+|\/+$/g, '');
   const timeoutMs = opts.timeoutMs ?? 5000;

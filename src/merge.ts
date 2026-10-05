@@ -4,6 +4,10 @@ import { ConfigError } from './errors.js';
 const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
 const INDEX_RE = /^(0|[1-9][0-9]*)$/;
 
+/**
+ * Strips `prefix` (case-insensitive, once) from a flat key. Returns the
+ * remainder, or `null` when the key doesn't qualify (too short, no match).
+ */
 export function stripPrefix(key: string, prefix?: string): string | null {
   if (!prefix) return key;
   if (key.length <= prefix.length) return null;
@@ -12,7 +16,12 @@ export function stripPrefix(key: string, prefix?: string): string | null {
   return key.slice(prefix.length);
 }
 
-/** Expand flat UPPER__NESTED keys into nested objects. Only `__` splits. */
+/**
+ * Expands flat `UPPER__NESTED` keys into nested objects. Only `__` splits;
+ * keys lowercase; `envMap` entries stay literal. Throws `E_PROTO` on forbidden
+ * segments, `E_EMPTY_SEGMENT` on empties, `E_ARRAY_MIX` on same-layer
+ * scalar/indexed/named mixing.
+ */
 export function expandKeys(
   flat: Record<string, unknown>,
   opts?: { separator?: '__'; prefix?: string; envMap?: Record<string, string> },
@@ -110,10 +119,9 @@ export function expandKeys(
 }
 
 /**
- * Convert plain objects with all-canonical-index keys ({0:..,1:..}) into arrays.
- * Gaps -> E_SPARSE_ARRAY, length >1024 -> E_ARRAY_CAP. Recurses depth-first.
- * Numeric segments are indexes only when the parent object is all-indexes;
- * otherwise they stay literal keys.
+ * Folds all-index objects (`{0:.., 1:..}`) into arrays, depth-first. Gaps throw
+ * `E_SPARSE_ARRAY`, over 1024 elements throws `E_ARRAY_CAP`. Objects with any
+ * non-index key keep literal keys.
  */
 export function normalizeIndexedObjects(value: unknown, path = '<root>'): unknown {
   if (Array.isArray(value)) return value.map((x, i) => normalizeIndexedObjects(x, `${path}[${i}]`));
@@ -157,12 +165,19 @@ function setPath(root: Record<string, unknown>, parts: string[], value: unknown)
   cur[parts[parts.length - 1]!] = value;
 }
 
+/** True for plain object literals (and `Object.create(null)`), false for arrays, class instances, and primitives. */
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (!v || typeof v !== 'object') return false;
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 }
 
+/**
+ * Deep-merges `override` over `base` (later source wins per leaf). `undefined`
+ * passes through, `null` wins outright, class instances replace instead of
+ * merging, and `__proto__` keys throw `E_PROTO`. Arrays follow `arrayStrategy`
+ * (`replace` wins wholesale, `concat` appends, `mergeIndex` unions per index).
+ */
 export function deepMerge(base: unknown, override: unknown, arrayStrategy: ArrayStrategy = 'replace'): unknown {
   if (override === undefined) return base;
   if (base === undefined) return override;
@@ -203,4 +218,5 @@ export function deepMerge(base: unknown, override: unknown, arrayStrategy: Array
   return override;
 }
 
+/** Canonical index test: `0` or non-zero-padded positives (`01` is a name, not an index). */
 export { INDEX_RE };
