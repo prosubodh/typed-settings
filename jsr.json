@@ -1,6 +1,6 @@
 {
   "name": "@typed-settings/typed-settings",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
