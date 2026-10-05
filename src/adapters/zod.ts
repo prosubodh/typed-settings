@@ -1,6 +1,8 @@
 /**
  * Zod helpers: `withPrefix` scopes any Standard Schema under an env prefix,
  * `coerceEnv` is the identity hook for composed pipelines.
+ *
+ * @module
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 

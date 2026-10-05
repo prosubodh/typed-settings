@@ -4,6 +4,8 @@
  * Rules: never spread `import.meta.env` (it drags server secrets into the
  * client bundle). Pass it as a map; file preloading belongs in `vite.config.ts`
  * via `loadEnvFiles()` passed as `{ text }`.
+ *
+ * @module
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { settings, settingsAsync, ConfigError, pickPublic } from '../index.js';

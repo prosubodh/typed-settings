@@ -7,6 +7,8 @@
  * outside a React Server Component, which would break plain Node/vitest usage).
  *   // settings.ts (server)
  *   import 'server-only';
+ *
+ * @module
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { settings, settingsAsync, ConfigError, pickPublic } from '../index.js';

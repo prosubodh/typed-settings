@@ -2,6 +2,8 @@
  * HashiCorp Vault provider (KVv1 + KVv2): reads one secret path into a flat map.
  * Token comes from `auth.token` or `VAULT_TOKEN`; KVv2 envelopes unwrap only
  * when a `metadata` sibling is present. Fail-closed on 403.
+ *
+ * @module
  */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';

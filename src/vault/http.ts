@@ -1,6 +1,8 @@
 /**
  * Generic HTTP secret provider: GETs a JSON endpoint and reads a dot-path
  * (`jsonPath`, default `'data'`) into a flat map. Auth rides in `headers`.
+ *
+ * @module
  */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';

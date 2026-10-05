@@ -2,6 +2,8 @@
  * AWS provider: Secrets Manager ids plus SSM parameters (with decryption)
  * merged into one flat map. SDK clients are injected, never imported blindly,
  * so tests can pass fakes and Edge bundles stay lean.
+ *
+ * @module
  */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';

@@ -1,6 +1,6 @@
 {
   "name": "typed-settings",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "One-call typed config for TS: env + .env + yaml/toml/json + secrets-dir + vault -> frozen object. Standard Schema + legacy bridges.",
   "type": "module",
   "main": "./dist/index.cjs",

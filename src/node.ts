@@ -3,6 +3,8 @@
  *
  * Importing this module installs the file-read hook that core uses under ESM.
  * Edge bundlers should skip it entirely and pass `{ text }` / `{ map }` sources.
+ *
+ * @module
  */
 import { readFileSync, readdirSync, statSync, watch } from 'node:fs';
 import type { FSWatcher } from 'node:fs';

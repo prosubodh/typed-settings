@@ -5,6 +5,8 @@
  * secrets-dir maps, and vault secrets, then merge, expand `$VAR` references,
  * coerce, validate against a Standard Schema, and return the result frozen.
  * Anything invalid throws `ConfigError` at boot with the key and source attached.
+ *
+ * @module
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { Flat, SettingsOptions, SourceInput } from './types.js';
