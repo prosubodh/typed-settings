@@ -22,4 +22,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # JSR resolves npm deps (yaml, smol-toml) from node_modules — it must exist.
+      - run: npm ci
       - run: npx jsr publish
