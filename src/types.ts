@@ -12,8 +12,10 @@ export interface SecretProvider {
 
 /**
  * One config source. Strings `'env' | '.env' | '.env.local'` are built-ins,
- * any other string is a file path; objects cover inline text, files,
- * secrets dirs (resolved by the caller), maps, and providers.
+ * any other string is a file path (relative to cwd; `.json`/`.yaml`/`.yml`/
+ * `.toml` are parsed structurally, anything else as `.env` text); objects cover
+ * inline text, files, secrets dirs (resolved by the caller), maps, and
+ * providers.
  */
 export type SourceInput =
   | 'env'
@@ -26,7 +28,7 @@ export type SourceInput =
   | { provider: SecretProvider; prefix?: string }
   | SecretProvider
   | Flat
-  | string; // file path shorthand
+  | string; // file path shorthand, see the note above
 
 /** How arrays merge across layers: wholesale win, append, or per-index union. */
 export type ArrayStrategy = 'replace' | 'concat' | 'mergeIndex';

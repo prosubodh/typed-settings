@@ -605,9 +605,12 @@ function freezeDeep<T>(v: T): T {
 
 /**
  * Loads, merges, expands, coerces, and validates config synchronously, returning
- * the inferred output type, frozen. Throws `ConfigError` on invalid input (issues
- * carry `path` + winning-source `from`, secrets redacted) and `USE_ASYNC` when a
- * provider or the schema itself is async — then use `settingsAsync()`.
+ * the inferred output type, frozen. Each issue names the failing `path` and the
+ * source that won it, with secrets redacted.
+ *
+ * @throws ConfigError on merge, parse, expansion, or validation failure.
+ * @throws ConfigError with `code: 'USE_ASYNC'` if a provider or the schema is
+ * async — switch to `settingsAsync()`.
  */
 export function settings<S extends StandardSchemaV1>(opts: SettingsOptions<S>): StandardSchemaV1.InferOutput<S> {
   const envSnapshot = getEnvSnapshot(opts.env);
