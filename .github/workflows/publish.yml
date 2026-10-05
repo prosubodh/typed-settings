@@ -1,0 +1,25 @@
+name: publish
+
+# Publishes to JSR when a GitHub Release is cut.
+# One-time setup (on jsr.io, as the @typed-settings scope owner):
+#   1. Create the @typed-settings scope if it doesn't exist.
+#   2. Link the package to this repo (package Settings > GitHub) so trusted
+#      publishing via OIDC works — no tokens needed.
+# After that: bump "version" in jsr.json + package.json, push, cut a Release,
+# and this workflow publishes that exact tag.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-jsr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - run: npx jsr publish
