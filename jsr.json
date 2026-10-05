@@ -1,0 +1,23 @@
+{
+  "name": "@typed-settings/typed-settings",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./zod": "./src/adapters/zod.ts",
+    "./yup": "./src/adapters/yup.ts",
+    "./joi": "./src/adapters/joi.ts",
+    "./superstruct": "./src/adapters/superstruct.ts",
+    "./next": "./src/framework/next.ts",
+    "./vite": "./src/framework/vite.ts",
+    "./vault-hashicorp": "./src/vault/hashicorp.ts",
+    "./vault-aws": "./src/vault/aws.ts",
+    "./vault-http": "./src/vault/http.ts"
+  },
+  "compilerOptions": {
+    "strict": true
+  },
+  "publish": {
+    "include": ["src/", "README.md"]
+  }
+}
