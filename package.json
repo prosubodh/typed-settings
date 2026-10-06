@@ -89,6 +89,14 @@
     "standard-schema"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prosubodh/typed-settings"
+  },
+  "homepage": "https://github.com/prosubodh/typed-settings#readme",
+  "bugs": {
+    "url": "https://github.com/prosubodh/typed-settings/issues"
+  },
   "engines": {
     "node": ">=20"
   },
