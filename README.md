@@ -297,10 +297,14 @@ Every code is listed with a fix in [docs/errors.md](docs/errors.md).
 ```sh
 npm install
 npm run typecheck   # tsc --noEmit
+npm run build       # tsup (ESM + CJS + DTS) - required before `npm test`
 npm test            # vitest - 441 tests, 100% lines/branches/functions/statements enforced
-npm run build       # tsup (ESM + CJS + DTS)
 npm run size        # bundle budgets (tracking only)
 ```
+
+The `init`-template integration tests load a scaffolded project that imports
+`typed-settings` by name, which resolves (via self-reference) to `dist/`, so run
+`npm run build` before `npm test`.
 
 The source is laid out by job: `src/index.ts` is the pipeline, `src/{expand,coerce,merge,adapter,errors}.ts` are the stages, then `src/formats/`, `src/node.ts`, `src/vault/`, `src/adapters/`, `src/cli/`, `src/framework/`. Tests live in `test/`, reference docs in `docs/`, runnable samples in `examples/`.
 

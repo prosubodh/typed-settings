@@ -19,6 +19,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test -- --coverage
+      # The init-template integration tests load the built package
+      # (typed-settings self-resolves to dist/), so build before testing.
       - run: npm run build
+      - run: npm test -- --coverage
       - run: npm run size
