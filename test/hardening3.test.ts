@@ -34,6 +34,12 @@ describe('hardening3: approved breaking fixes', () => {
     // Unresolved ambient names still degrade to literals (shell-prompt safety).
     const out = settings({ schema: schema as never, sources: ['env'], env: { A: 'cost $5 and $P' }, coerce: false }) as Record<string, string>;
     expect(out['a']).toBe('cost $5 and $P');
+    // Ambient env keys outside the charset (OS vars like Windows `ProgramFiles(x86)`)
+    // are skipped, not fatal. Asserted explicitly so the branch is covered on every
+    // platform, not just where the host env happens to contain such keys.
+    expect(() =>
+      settings({ schema: schema as never, sources: ['env'], env: { A: 'ok', 'ProgramFiles(x86)': 'C:\\' }, coerce: false }),
+    ).not.toThrow();
   });
   it('dotenv-quoted commas stay strings end to end', () => {
     const schema = z.object({ greeting: z.string() });
