@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- **Smaller published package.** Bundles are minified. The packed tarball drops
+  from ~120 KB to ~82 KB (−32%) and unpacked from ~465 KB to ~278 KB (−40%).
+  No API or behavior change.
+- CI: build before test so the `init`-template integration tests resolve the
+  built package, and pin the ambient bad-key skip so 100% branch coverage holds
+  on Linux as well as Windows.
+
 ## 0.2.0
 
 Security hardening and correctness release. New options are additive
