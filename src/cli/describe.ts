@@ -80,8 +80,11 @@ function unwrapField(t: unknown): { inner: unknown; optional: boolean; def?: unk
       cur = c?.def?.innerType ?? (typeof c?.unwrap === 'function' ? safeUnwrap(c.unwrap) : undefined) ?? cur;
       continue;
     }
-    if (z4type === 'readonly' || z4type === 'nonoptional' || z4type === 'success') {
-      cur = c?.def?.innerType ?? cur;
+    if (z4type === 'nonoptional' || z4type === 'success') {
+      const inner = c?.def?.innerType;
+      if (inner === undefined || inner === cur) break;
+      cur = inner;
+      t = cur;
       continue;
     }
     // Zod 3: _def.typeName
@@ -166,6 +169,9 @@ function zodTypeName(t: unknown): string {
     case 'ZodString': return 'string';
     case 'ZodNumber': return 'number';
     case 'ZodBoolean': return 'boolean';
+    case 'ZodBigInt': return 'bigint';
+    case 'ZodDate': return 'date';
+    case 'ZodNaN': return 'number';
     case 'ZodArray': return 'array';
     case 'ZodObject': return 'object';
     case 'ZodEnum': return `enum(${((c?._def?.values ?? []) as unknown[]).join('|')})`;
@@ -175,19 +181,22 @@ function zodTypeName(t: unknown): string {
   }
 }
 
-function walkZod(prefix: string, t: unknown, out: FieldDesc[]): void {
+function walkZod(prefix: string, t: unknown, out: FieldDesc[], inheritedOptional = false): void {
   const { inner, optional, def, desc } = unwrapZod(t);
+  // Optionality inherits downward: children of an optional object are not
+  // required even when they carry no default of their own.
+  const effOptional = inheritedOptional || optional;
   const shape = getShape(inner);
   if (shape) {
     for (const [k, v] of Object.entries(shape)) {
-      walkZod(prefix ? `${prefix}.${k}` : k, v, out);
+      walkZod(prefix ? `${prefix}.${k}` : k, v, out, effOptional);
     }
     return;
   }
   out.push({
     path: prefix || '<root>',
     type: zodTypeName(inner),
-    required: !optional && def === undefined,
+    required: !effOptional && def === undefined,
     default: def,
     description: desc,
   });
@@ -306,19 +315,20 @@ function valibotTypeName(t: unknown): string {
   }
 }
 
-function walkValibot(prefix: string, t: unknown, out: FieldDesc[]): void {
+function walkValibot(prefix: string, t: unknown, out: FieldDesc[], inheritedOptional = false): void {
   const { inner, optional, def, desc } = unwrapValibot(t);
+  const effOptional = inheritedOptional || optional;
   const c = inner as ValibotField;
   if (c?.type === 'object' && c.entries && typeof c.entries === 'object') {
     for (const [k, v] of Object.entries(c.entries)) {
-      walkValibot(prefix ? `${prefix}.${k}` : k, v, out);
+      walkValibot(prefix ? `${prefix}.${k}` : k, v, out, effOptional);
     }
     return;
   }
   out.push({
     path: prefix || '<root>',
     type: valibotTypeName(inner),
-    required: !optional && def === undefined,
+    required: !effOptional && def === undefined,
     default: def,
     description: desc,
   });
@@ -377,6 +387,16 @@ function walkArktypeValue(path: string, value: unknown, required: boolean, def: 
 }
 
 /**
+ * Joins a prefix and dotted path into an env key. A prefix without a trailing
+ * underscore would fuse (`APP` + `port` = `APPPORT`), so the separator is
+ * added; characters outside `[A-Z0-9_]` become `_` (generated keys must parse).
+ */
+export function envKey(prefix: string, path: string): string {
+  const sep = prefix && !prefix.endsWith('_') ? `${prefix}_` : prefix;
+  return (sep + path.replace(/\./g, '__')).toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+}
+
+/**
  * Renders fields as `.env.example` text (`KEY=value # type required|default: …`,
  * sorted, with a header comment). The `<root>` placeholder becomes a comment —
  * never a literal `<ROOT>=` line.
@@ -391,7 +411,7 @@ export function toEnvExample(fields: FieldDesc[], prefix = ''): string {
       lines.push(`# ${f.description ?? 'no fields discovered — fill manually'}`);
       continue;
     }
-    const key = (prefix + f.path.replace(/\./g, '__')).toUpperCase();
+    const key = envKey(prefix, f.path);
     const val = f.default !== undefined && typeof f.default !== 'object' ? String(f.default) : f.type === 'number' ? '0' : f.type === 'boolean' ? 'false' : '';
     const comment = f.required ? 'required' : `default: ${f.default !== undefined ? JSON.stringify(f.default) : 'none'}`;
     if (f.description) lines.push(`# ${f.description}`);
@@ -407,7 +427,10 @@ export function toEnvExample(fields: FieldDesc[], prefix = ''): string {
 export function toMarkdownDocs(fields: FieldDesc[], prefix = ''): string {
   const lines = ['# Configuration', '', '| Env | Path | Type | Required | Default |', '| --- | --- | --- | --- | --- |'];
   for (const f of [...fields].sort((a, b) => a.path.localeCompare(b.path))) {
-    const env = (prefix + f.path.replace(/\./g, '__')).toUpperCase();
+    // Like the env emitter: '<root>' has no mappable key — skip the row rather
+    // than printing a bogus `<ROOT>` variable into the docs.
+    if (f.path === '<root>') continue;
+    const env = envKey(prefix, f.path);
     lines.push(`| \`${env}\` | \`${f.path}\` | ${f.type} | ${f.required} | ${f.default !== undefined ? `\`${JSON.stringify(f.default)}\`` : '-'} |`);
   }
   lines.push('');

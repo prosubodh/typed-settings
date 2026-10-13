@@ -25,7 +25,9 @@ describe('vite binding', () => {
     expect(cfg.port).toBe(4000);
   });
 
-  it('never imports node:fs (checked in edge test)', () => {
-    expect(true).toBe(true);
+  it('publicSettings omits missing keys (Partial, statically honest)', () => {
+    const pub = publicSettings({ a: 1 } as { a: number; b: number }, ['a', 'b'] as const);
+    expect(pub).toEqual({ a: 1 });
+    expect('b' in pub).toBe(false);
   });
 });

@@ -49,6 +49,31 @@ describe('break: redirect guard', () => {
     expect(calls).toBe(2);
   });
 
+  it('https→http downgrade strips auth even on the same host', async () => {
+    let n = 0;
+    const seen: (string | null)[] = [];
+    const f = async (u: string, init?: RequestInit) => {
+      n++;
+      if (n === 1) return new Response('', { status: 302, headers: { location: 'http://a.test/plain' } });
+      seen.push(new Headers(init?.headers).get('authorization'));
+      return new Response('{}', { status: 200 });
+    };
+    await fetchWithRedirectGuard('https://a.test/secure', { headers: new Headers({ Authorization: 'b' }) }, f);
+    expect(seen).toEqual([null]); // credentials never ride a cleartext hop
+    // Once stripped, a later https hop cannot resurrect them either.
+    let m = 0;
+    const seen2: (string | null)[] = [];
+    const g = async (u: string, init?: RequestInit) => {
+      m++;
+      if (m === 1) return new Response('', { status: 302, headers: { location: 'http://a.test/plain' } });
+      if (m === 2) return new Response('', { status: 302, headers: { location: 'https://a.test/back' } });
+      seen2.push(new Headers(init?.headers).get('authorization'));
+      return new Response('{}', { status: 200 });
+    };
+    await fetchWithRedirectGuard('https://a.test/x', { headers: new Headers({ Authorization: 'b' }) }, g);
+    expect(seen2).toEqual([null]);
+  });
+
   it('exhausted redirects and invalid Location fail closed', async () => {
     const loop = async () => new Response('', { status: 302, headers: { location: '/x' } });
     await expect(fetchWithRedirectGuard('https://a.test/', {}, loop, 1)).rejects.toMatchObject({ code: 'E_REDIRECT' });
@@ -113,6 +138,43 @@ describe('break: normalizeSecretMap', () => {
   });
 });
 
+describe('break: aws key collisions', () => {
+  it('two raw secrets sharing a last segment throw E_COLLISION', async () => {
+    const p = awsProvider({
+      secrets: ['a/token', 'b/token'],
+      secretsClient: { getSecretValue: async () => 'v' },
+    });
+    await expect(p.load()).rejects.toMatchObject({ code: 'E_COLLISION' });
+  });
+
+  it('two JSON secrets emitting the same key throw E_COLLISION', async () => {
+    const p = awsProvider({
+      secrets: ['a', 'b'],
+      // Never last-wins: two secrets claiming PORT is a naming clash, not a merge.
+      secretsClient: { getSecretValue: async () => ({ SecretString: JSON.stringify({ PORT: '1' }) }) },
+    });
+    await expect(p.load()).rejects.toMatchObject({ code: 'E_COLLISION' });
+  });
+
+  it('params mapping to the same stripped key throw E_COLLISION', async () => {
+    const p = awsProvider({
+      params: ['/a', '/b'],
+      ssmClient: { getParameters: async () => ({ '/a/DUP': '1', '/b/DUP': '2' }) },
+    });
+    await expect(p.load()).rejects.toMatchObject({ code: 'E_COLLISION' });
+  });
+
+  it('a param mapping onto a secret key throws E_COLLISION', async () => {
+    const p = awsProvider({
+      secrets: ['prod/TOKEN'],
+      params: ['/prod'],
+      secretsClient: { getSecretValue: async () => 'v' },
+      ssmClient: { getParameters: async () => ({ '/prod/TOKEN': 'x' }) },
+    });
+    await expect(p.load()).rejects.toMatchObject({ code: 'E_COLLISION' });
+  });
+});
+
 describe('break: hashicorp unwrap matrix', () => {
   const load = (body: unknown, status = 200) =>
     hashicorpProvider({ url: 'https://v.test', path: 'p', fetchFn: async () => json(body, status) }).load();
@@ -140,6 +202,7 @@ describe('break: hashicorp unwrap matrix', () => {
   });
 
   it('explicit empty token sends no credential (no env fallback)', async () => {
+    const saved = process.env['VAULT_TOKEN'];
     process.env['VAULT_TOKEN'] = 'envtok';
     let got: string | null = 'unset';
     const f = async (_u: string, init?: RequestInit) => {
@@ -155,7 +218,8 @@ describe('break: hashicorp unwrap matrix', () => {
       await hashicorpProvider({ url: 'https://v.test', path: 'p', fetchFn: f }).load();
       expect(got).toBe('envtok');
     } finally {
-      delete process.env['VAULT_TOKEN'];
+      if (saved === undefined) delete process.env['VAULT_TOKEN'];
+      else process.env['VAULT_TOKEN'] = saved;
     }
   });
 

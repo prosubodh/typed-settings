@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, symlinkSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { expandValue } from '../src/expand.js';
 import { parseYamlText } from '../src/formats/yaml.js';
@@ -27,7 +27,7 @@ describe('break: expand literal-fallthrough and yaml aliases', () => {
     expect(() => parseYamlText('a: *missing', 'myfile')).toThrow(/ParseError \(myfile\)/);
   });
 
-  it('circular yaml anchors fail closed with E_CYCLE at load', () => {
+  it('circular yaml anchors fail closed with E_CIRCULAR at load', () => {
     (globalThis as unknown as { __typedSettingsFs: unknown }).__typedSettingsFs = {
       readFileSync: (p: string) => {
         if (p === 'c.yaml') return 'a: &x [*x]';
@@ -39,7 +39,7 @@ describe('break: expand literal-fallthrough and yaml aliases', () => {
     try {
       expect(() =>
         settings({ schema: z.object({}).passthrough(), sources: ['c.yaml'], env: {}, expand: false, coerce: false }),
-      ).toThrow(/E_CYCLE/);
+      ).toThrow(/E_CIRCULAR/);
     } finally {
       delete (globalThis as unknown as { __typedSettingsFs?: unknown }).__typedSettingsFs;
     }
@@ -164,6 +164,32 @@ describe('break: gen destinations', () => {
     expect(await runGen({ schema, docs })).toBe(0);
     expect(await runGen({ schema, docs })).toBe(2);
     expect(await runGen({ schema, docs, force: true })).toBe(0);
+  });
+
+  it('--force refuses to write through a symlink (E_SYMLINK)', async () => {
+    const dir = localTmp('ts-final');
+    const schema = join(dir, 's.ts');
+    writeFileSync(schema, SCHEMA);
+    const victim = join(dir, 'victim.txt');
+    writeFileSync(victim, 'keep me');
+    const out = join(dir, '.env.example');
+    try {
+      symlinkSync(victim, out);
+    } catch {
+      // Windows without Developer Mode cannot create symlinks — skip.
+      return;
+    }
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+    const errs: unknown[][] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void errs.push(a);
+    try {
+      expect(await runGen({ schema, out, force: true })).toBe(2);
+      expect(errs.some((a) => String(a[0]).includes('E_SYMLINK'))).toBe(true);
+      expect(readFileSync(victim, 'utf8')).toBe('keep me'); // target untouched
+    } finally {
+      console.error = orig;
+    }
   });
 });
 

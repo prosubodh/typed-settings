@@ -9,11 +9,17 @@ import { parseYamlText } from '../src/formats/yaml.js';
 import { ConfigError } from '../src/errors.js';
 
 describe('break: expandKeys', () => {
-  it('forbidden segments match case-insensitively (no __PROTO__ bypass)', () => {
-    for (const key of ['A__CONSTRUCTOR__B', '__PROTO__', 'X__Prototype__Y']) {
+  it('only __proto__ is forbidden (case-insensitive); constructor/prototype are inert data', () => {
+    // Whole-key __proto__ (case-insensitive) and cleanSplit segments can never
+    // contain it — but the literal-fallback path must still guard the whole key.
+    for (const key of ['__proto__', '__PROTO__', '__PrOtO__']) {
       expect(() => expandKeys({ [key]: '1' }), key).toThrow(ConfigError);
     }
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    // constructor/prototype are ordinary inert own-data keys — assignment to
+    // them shadows the inherited property without mutating any prototype.
+    expect(expandKeys({ A__CONSTRUCTOR__B: '1' })).toEqual({ a: { constructor: { b: '1' } } });
+    expect(expandKeys({ X__Prototype__Y: '1' })).toEqual({ x: { prototype: { y: '1' } } });
   });
 
   it('messy separators degrade to literal keys (Next.js `__NEXT_*` safe)', () => {
@@ -29,6 +35,21 @@ describe('break: expandKeys', () => {
   it('indexed + named siblings in one layer throw E_ARRAY_MIX both orders', () => {
     expect(() => expandKeys({ ARR__0: 'x', ARR__FOO: 'y' })).toThrow(/E_ARRAY_MIX/);
     expect(() => expandKeys({ ARR__FOO: 'y', ARR__0: 'x' })).toThrow(/E_ARRAY_MIX/);
+  });
+
+  it('deep A__B vs A__B__C collisions error in both orders', () => {
+    expect(() => expandKeys({ A__B: '1', A__B__C: '2' })).toThrow(/E_COLLISION/);
+    expect(() => expandKeys({ A__B__C: '2', A__B: '1' })).toThrow(/E_COLLISION/);
+  });
+
+  it('scalar tops vs subtrees collision in both orders', () => {
+    expect(() => expandKeys({ TOP: '1', TOP__X: '2' })).toThrow(/E_COLLISION/);
+    expect(() => expandKeys({ TOP__X: '2', TOP: '1' })).toThrow(/E_COLLISION/);
+  });
+
+  it('case-insensitive duplicates claim one path (both nested and flat)', () => {
+    expect(() => expandKeys({ A__B: '1', A__b: '2' })).toThrow(/E_COLLISION/);
+    expect(() => expandKeys({ PORT: '1', port: '2' })).toThrow(/E_COLLISION/);
   });
 
   it('scalar + indexed mixing throws both orders', () => {
@@ -52,8 +73,11 @@ describe('break: expandKeys', () => {
   it('empty segments and invalid keys', () => {
     // No more E_EMPTY_SEGMENT crash: messy separators degrade to literal keys.
     expect(expandKeys({ A____B: '1' })).toEqual({ a____b: '1' });
-    expect(expandKeys({ 'HAS-DASH': '1', HAS_SPACE: '1' })).toEqual({ has_space: '1' });
-    expect(() => expandKeys({ CONSTRUCTOR: '1' })).toThrow(/E_PROTO/);
+    // Bad-charset keys throw E_BAD_KEY in authored maps (envMap bridges them).
+    expect(() => expandKeys({ 'HAS-DASH': '1', HAS_SPACE: '1' })).toThrow(/E_BAD_KEY/);
+    expect(expandKeys({ 'HAS-DASH': '1' }, { envMap: { 'HAS-DASH': 'dash' } })).toEqual({ dash: '1' });
+    // constructor/prototype are inert own-data keys and flow as ordinary keys.
+    expect(expandKeys({ CONSTRUCTOR: '1' })).toEqual({ constructor: '1' });
     // NOTE: `{__proto__: '1'}` as a JS literal sets the prototype, not an own key —
     // the realistic attack arrives via JSON.parse, which preserves it as data.
     expect(() => expandKeys(JSON.parse('{"__proto__":"1"}'))).toThrow(/E_PROTO/);
@@ -74,6 +98,18 @@ describe('break: deepMerge', () => {
     const b = new Array(1024).fill(1);
     expect((deepMerge(a, b, 'mergeIndex') as unknown[]).length).toBe(1024);
     expect(() => deepMerge(a, [...b, 1], 'mergeIndex')).toThrow(/E_ARRAY_CAP/);
+  });
+
+  it('concat caps at 1024; populated map-vs-list flips throw; empty sides layer', () => {
+    const a = new Array(1024).fill(0);
+    expect(() => deepMerge(a, ['x'], 'concat')).toThrow(/E_ARRAY_CAP/);
+    expect(deepMerge([1], [2], 'concat')).toEqual([1, 2]);
+    // "one source said map, another said list" for the same subtree is a shape
+    // conflict — scalars still last-win, only populated map/list flips throw.
+    expect(() => deepMerge({ a: { b: 1 } }, { a: ['x'] }, 'replace')).toThrow(/E_ARRAY_MIX/);
+    // Empty sides are "no shape yet": the non-empty side wins during layering.
+    expect(deepMerge({}, ['x'], 'replace')).toEqual(['x']);
+    expect(deepMerge(['x'], {}, 'replace')).toEqual({});
   });
 
   it('null wins, undefined is ignored', () => {
@@ -116,12 +152,18 @@ describe('break: coerce', () => {
     expect(tryParseEnvValue('1.0')).toBe(1); // float-shaped parses (schema decides int-ness)
   });
 
-  it('booleans and nulls', () => {
-    expect(tryParseEnvValue('YES')).toBe(true);
-    expect(tryParseEnvValue('Off')).toBe(false);
+  it('booleans and nulls (core set only)', () => {
+    expect(tryParseEnvValue('TRUE')).toBe(true);
+    expect(tryParseEnvValue('FALSE')).toBe(false);
     expect(tryParseEnvValue('NULL')).toBe(null);
-    expect(tryParseEnvValue('UNDEFINED')).toBe(undefined);
     expect(tryParseEnvValue('maybe')).toBe('maybe');
+    // Extended words stay strings: they corrupt real data (countries, codes).
+    for (const w of ['YES', 'yes', 'y', 'Y', 'on', 'ON', 'NO', 'no', 'n', 'off', 'Off']) {
+      expect(tryParseEnvValue(w)).toBe(w);
+    }
+    // The word 'undefined' stays a string (it used to un-set the key).
+    expect(tryParseEnvValue('UNDEFINED')).toBe('UNDEFINED');
+    expect(tryParseEnvValue('undefined')).toBe('undefined');
   });
 
   it('csv: escapes, quotes, unterminated', () => {
@@ -131,7 +173,8 @@ describe('break: coerce', () => {
     expect(tryParseEnvValue("'a,b',c")).toEqual(['a,b', 'c']);
     expect(tryParseEnvValue("'a\\b',c")).toEqual(['a\\b', 'c']); // backslash inside quotes kept
     expect(tryParseEnvValue("'a,b\\'")).toBe("'a,b\\'"); // trailing backslash: unterminated, stays whole
-    expect(tryParseEnvValue("'a,b'")).toEqual(['a,b']); // fully-quoted single value unwraps (still a 1-list)
+    expect(tryParseEnvValue("'a,b'")).toBe("'a,b'"); // fully-quoted single value groups: stays a string
+    expect(tryParseEnvValue('"a,b"')).toBe('"a,b"'); // double-quoted groups too
     expect(tryParseEnvValue('1e999')).toBe('1e999'); // overflow stays a string
   });
 
@@ -153,7 +196,8 @@ describe('break: expandValue', () => {
   const look = (m: Record<string, string | undefined>) => (n: string) => m[n];
   it('$$ escape and backslash-dollar are literal (pinned)', () => {
     expect(expandValue('$$A', look({ A: 'x' }))).toBe('$A');
-    expect(expandValue('\\$FOO', look({ FOO: 'x' }), { allowUnresolved: true })).toBe('$FOO');
+    // `\$` keeps the backslash: C:\$RECYCLE round-trips verbatim. Use `$$` for a bare `$`.
+    expect(expandValue('\\$FOO', look({ FOO: 'x' }), { allowUnresolved: true })).toBe('\\$FOO');
   });
 
   it('$ with invalid name is literal', () => {
@@ -173,10 +217,12 @@ describe('break: expandValue', () => {
     expect(expandValue('${A:-a\\}b}', look({}))).toBe('a}b');
   });
 
-  it(':= and :? rejected; unterminated throws ParseError', () => {
+  it(':= and :? rejected; unterminated throws E_EXPAND', () => {
     expect(() => expandValue('${A:=x}', look({}))).toThrow(/E_BAD_OP/);
     expect(() => expandValue('${A:?x}', look({}))).toThrow(/E_BAD_OP/);
-    expect(() => expandValue('${A:-x', look({}))).toThrow(/ParseError/);
+    expect(() => expandValue('${A:-x', look({}))).toThrow(/E_EXPAND/);
+    // Truncated mid-name (no closing brace at all) fails loudly too.
+    expect(() => expandValue('${A', look({}))).toThrow(/E_EXPAND/);
   });
 
   it('${ with trailing junk after the name stays literal', () => {
@@ -227,6 +273,28 @@ describe('break: .env parser', () => {
     expect(parseEnvText('A=1\nA=2')).toEqual({ A: '2' });
     expect(parseEnvText('﻿A=1')).toEqual({ A: '1' });
     expect(parseEnvText('  A  =  1  ')).toEqual({ A: '1' });
+  });
+
+  it('trailing garbage after quotes is a ParseError, not a silent truncation', () => {
+    expect(() => parseEnvText('A="hi"GARBAGE')).toThrow(/trailing characters/);
+    expect(() => parseEnvText("A='hi'GARBAGE")).toThrow(/trailing characters/);
+    expect(() => parseEnvText("A='it\\'s'")).toThrow(/trailing characters/);
+    // Whitespace + comment tails are still fine.
+    expect(parseEnvText('A="hi" # ok')).toEqual({ A: 'hi' });
+    expect(parseEnvText("A='hi'\n")).toEqual({ A: 'hi' });
+  });
+
+  it('quoted commas survive dotenv parsing as one string', () => {
+    expect(parseEnvText('A="a,b"')).toEqual({ A: 'a\\,b' });
+    expect(parseEnvText("A='a,b'")).toEqual({ A: 'a\\,b' });
+    // Literal backslashes in quoted values are preserved verbatim, so `\,`
+    // escapes survive and Windows paths round-trip.
+    expect(parseEnvText('A="a\\\\b"')).toEqual({ A: 'a\\b' });
+    // ...but JSON-shaped quoted values still parse to objects/arrays unescaped,
+    // and brace-start values that aren't JSON still get comma protection.
+    expect(parseEnvText("A='{\"x\":1}'")).toEqual({ A: '{"x":1}' });
+    expect(parseEnvText("A='[1,2]'")).toEqual({ A: '[1,2]' });
+    expect(parseEnvText("A='{a,b'")).toEqual({ A: '{a\\,b' });
   });
 });
 

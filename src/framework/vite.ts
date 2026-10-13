@@ -24,4 +24,15 @@ export function viteSettings<S extends StandardSchemaV1>(
   return settings({ ...opts, sources: [{ map: metaEnv }], env: {} } as SettingsOptions<S>);
 }
 
+/**
+ * Async twin of {@link viteSettings} for async schemas: same map-only inputs,
+ * awaited through `settingsAsync()`.
+ */
+export function viteSettingsAsync<S extends StandardSchemaV1>(
+  opts: Omit<SettingsOptions<S>, 'sources' | 'env'>,
+  metaEnv: Flat,
+): Promise<StandardSchemaV1.InferOutput<S>> {
+  return settingsAsync({ ...opts, sources: [{ map: metaEnv }], env: {} } as SettingsOptions<S>);
+}
+
 export type { Flat, SettingsOptions, StandardSchemaV1 };

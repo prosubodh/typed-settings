@@ -8,7 +8,8 @@ const store = vi.hoisted(() => ({
   children: [] as {
     args: unknown[];
     killed: boolean;
-    kill: () => boolean;
+    kills: unknown[];
+    kill: (...a: unknown[]) => boolean;
     emit: (ev: string, ...a: unknown[]) => void;
   }[],
 }));
@@ -19,12 +20,14 @@ vi.mock('node:child_process', () => {
     const child = {
       args,
       killed: false,
+      kills: [] as unknown[],
       on: (ev: string, fn: (...a: unknown[]) => void) => {
         (handlers[ev] ??= []).push(fn);
         return child;
       },
-      kill: () => {
+      kill: (...a: unknown[]) => {
         child.killed = true;
+        child.kills.push(a[0] ?? 'SIGTERM');
         return true;
       },
       emit: (ev: string, ...a: unknown[]) => {
@@ -151,6 +154,24 @@ describe('break: supervised watch (mocked child)', () => {
     expect(store.children[store.children.length - 1]!.killed).toBe(true);
   });
 
+  it('a no-change reload does not restart the child', async () => {
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    const body = JSON.stringify({ port: 1 });
+    writeFileSync(cfg, body);
+    const p = runWatch({ schema, config: cfg, cmd: ['node', 'server.js'] });
+    await waitFor(() => store.children.length >= 1);
+    // Rewrite identical bytes (mtime bump, same values): the supervised child
+    // must not churn on a touch. Only actual value changes restart it.
+    writeFileSync(cfg, body);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(store.children.length).toBe(1);
+    process.emit('SIGINT');
+    expect(await p).toBe(0);
+  });
+
   it('child start failures do not crash the watcher', async () => {
     const dir = localTmp('ts-watch2');
     const schema = join(dir, 'schema.ts');
@@ -164,6 +185,106 @@ describe('break: supervised watch (mocked child)', () => {
     await waitFor(() => store.children.length >= 2); // respawned after the failure
     process.emit('SIGINT');
     expect(await p).toBe(0);
+  });
+
+  it('child crashes are logged; stale and signal deaths handled; SIGKILL escalates', async () => {
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 1 }));
+    const errs: unknown[][] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void errs.push(a);
+    try {
+      const p = runWatch({ schema, config: cfg, cmd: ['node', 'server.js'] });
+      await waitFor(() => store.children.length >= 1);
+      // Reload replaces the live child (SIGTERM recorded for the kill).
+      writeFileSync(cfg, JSON.stringify({ port: 2 }));
+      await waitFor(() => store.children.length >= 2);
+      expect(store.children[0]!.kills[0]).toBe('SIGTERM');
+      // The old child's late death stays silent.
+      store.children[0]!.emit('exit', 139);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(errs.length).toBe(0);
+      // A real crash logs the code.
+      store.children[1]!.emit('exit', 139);
+      await waitFor(() => errs.length >= 1);
+      expect(String(errs[0]![0])).toContain('139');
+      // Signal deaths log the signal, not a code.
+      writeFileSync(cfg, JSON.stringify({ port: 3 }));
+      await waitFor(() => store.children.length >= 3);
+      store.children[2]!.emit('exit', null, 'SIGKILL');
+      await waitFor(() => errs.length >= 2);
+      expect(String(errs[errs.length - 1]![0])).toContain('SIGKILL');
+      // Clean exits stay silent.
+      writeFileSync(cfg, JSON.stringify({ port: 4 }));
+      await waitFor(() => store.children.length >= 4);
+      const m = errs.length;
+      store.children[3]!.emit('exit', 0);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(errs.length).toBe(m);
+      // SIGKILL escalation fires after the grace period for trapped children.
+      await new Promise((r) => setTimeout(r, 2300));
+      expect(store.children[0]!.kills).toEqual(['SIGTERM', 'SIGKILL']);
+      process.emit('SIGINT');
+      expect(await p).toBe(0);
+    } finally {
+      console.error = orig;
+    }
+  });
+
+  it('exit-on-child-error resolves with the child code', async () => {
+    const prevExit = process.exitCode;
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 1 }));
+    try {
+      const p = runWatch({ schema, config: cfg, cmd: ['node', 'server.js'], exitOnChildError: true });
+      await waitFor(() => store.children.length >= 1);
+      store.children[0]!.emit('exit', 3);
+      expect(await p).toBe(3);
+    } finally {
+      process.exitCode = prevExit;
+    }
+  });
+
+  it('exit-on-child-error resolves 1 on signal deaths', async () => {
+    const prevExit = process.exitCode;
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 1 }));
+    try {
+      const p = runWatch({ schema, config: cfg, cmd: ['node', 'server.js'], exitOnChildError: true });
+      await waitFor(() => store.children.length >= 1);
+      store.children[0]!.emit('exit', null, 'SIGKILL');
+      expect(await p).toBe(1);
+    } finally {
+      process.exitCode = prevExit;
+    }
+  });
+
+  it('external exit codes resolve the supervisor; listeners do not leak', async () => {
+    const prevExit = process.exitCode;
+    const before = process.listenerCount('SIGINT') + process.listenerCount('SIGTERM');
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 1 }));
+    try {
+      const p = runWatch({ schema, config: cfg });
+      await new Promise((r) => setTimeout(r, 150));
+      process.exitCode = 5;
+      expect(await p).toBe(5);
+      expect(process.listenerCount('SIGINT') + process.listenerCount('SIGTERM')).toBe(before);
+    } finally {
+      process.exitCode = prevExit;
+    }
   });
 
   it('--exit-on-error resolves 1 on invalid reload and restores exitCode', async () => {    const prevExit = process.exitCode;
@@ -232,6 +353,27 @@ describe('break: supervised watch (mocked child)', () => {
       throw new Error('kill ESRCH');
     };
     process.emit('SIGTERM');
+    expect(await p).toBe(0);
+  });
+
+  it('escalation kill failures are swallowed, never crash the supervisor', async () => {
+    const dir = localTmp('ts-watch2');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 1 }));
+    const p = runWatch({ schema, config: cfg, cmd: ['node', 's.js'] });
+    await waitFor(() => store.children.length >= 1);
+    const child = store.children[0]!;
+    child.kill = () => {
+      throw new Error('kill ESRCH');
+    };
+    // Reload replaces the child (immediate kill throws, swallowed), then the
+    // 2s escalation kill throws too — both must stay silent.
+    writeFileSync(cfg, JSON.stringify({ port: 2 }));
+    await waitFor(() => store.children.length >= 2);
+    await new Promise((r) => setTimeout(r, 2300));
+    process.emit('SIGINT');
     expect(await p).toBe(0);
   });
 

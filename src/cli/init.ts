@@ -20,8 +20,9 @@ export interface InitArgs {
 const SETTINGS_TPL: Record<string, string> = {
   zod: `import { z } from 'zod';
 import { settings } from 'typed-settings';
+import 'typed-settings/node';
 
-const schema = z.object({
+export const schema = z.object({
   port: z.coerce.number().default(3000),
 });
 
@@ -29,31 +30,37 @@ export const cfg = settings({ schema, sources: ['.env', 'env'], prefix: 'APP_' }
 `,
   valibot: `import * as v from 'valibot';
 import { settings } from 'typed-settings';
+import 'typed-settings/node';
 
-const schema = v.object({ port: v.optional(v.pipe(v.unknown(), v.transform(Number)), 3000) });
+export const schema = v.object({ port: v.optional(v.pipe(v.unknown(), v.transform(Number), v.number()), 3000) });
 
 export const cfg = settings({ schema: schema as never, sources: ['.env', 'env'], prefix: 'APP_' });
 `,
   arktype: `import { type } from 'arktype';
 import { settings } from 'typed-settings';
+import 'typed-settings/node';
 
-const schema = type({ 'port?: string.integer.parse = 3000' });
+export const schema = type({ port: 'number = 3000' });
 
 export const cfg = settings({ schema: schema as never, sources: ['.env', 'env'], prefix: 'APP_' });
 `,
-  yup: `import * as yup from 'yup';
+  yup: `// npm install yup
+import * as yup from 'yup';
 import { settings } from 'typed-settings';
+import 'typed-settings/node';
 import { yupAdapter } from 'typed-settings/yup';
 
-const schema = yup.object({ port: yup.number().default(3000) });
+export const schema = yup.object({ port: yup.number().default(3000) });
 
 export const cfg = settings({ schema: yupAdapter(schema) as never, sources: ['.env', 'env'], prefix: 'APP_' });
 `,
-  joi: `import Joi from 'joi';
+  joi: `// npm install joi
+import Joi from 'joi';
 import { settings } from 'typed-settings';
+import 'typed-settings/node';
 import { joiAdapter } from 'typed-settings/joi';
 
-const schema = Joi.object({ port: Joi.number().default(3000) });
+export const schema = Joi.object({ port: Joi.number().default(3000) });
 
 export const cfg = settings({ schema: joiAdapter(schema as never) as never, sources: ['.env', 'env'], prefix: 'APP_' });
 `,
@@ -73,11 +80,13 @@ const CONFIG_TPL: Record<string, string> = {
 export async function runInit(args: InitArgs): Promise<number> {
   const lib = args.lib ?? 'zod';
   const format = args.format ?? 'env';
-  if (!(lib in SETTINGS_TPL)) {
+  // hasOwn, not `in`: prototype names like 'constructor'/'toString' are `in`
+  // every object and would sail past the guard into a garbage template write.
+  if (!Object.hasOwn(SETTINGS_TPL, lib)) {
     console.error(`E_USAGE: --lib must be ${Object.keys(SETTINGS_TPL).join('|')} (got ${JSON.stringify(lib)})`);
     return 2;
   }
-  if (!(format in CONFIG_TPL)) {
+  if (!Object.hasOwn(CONFIG_TPL, format)) {
     console.error(`E_USAGE: --format must be ${Object.keys(CONFIG_TPL).join('|')} (got ${JSON.stringify(format)})`);
     return 2;
   }
@@ -128,5 +137,9 @@ export async function runInit(args: InitArgs): Promise<number> {
     written++;
   }
   console.log(`init: ${lib} + ${format} scaffolding ${written > 0 ? `written (${written} file${written === 1 ? '' : 's'})` : 'already up to date'}`);
+  if (format === 'env' && written > 0) {
+    // The #1 newcomer trap: .env.example is not read. Say so every time we write one.
+    console.log('hint: copy .env.example to .env and fill in real values (example files are never loaded)');
+  }
   return 0;
 }

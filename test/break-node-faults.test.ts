@@ -36,6 +36,8 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...orig,
     readFileSync: wrap(orig.readFileSync, 'readFileSync'),
+    lstatSync: wrap(orig.lstatSync, 'lstatSync'),
+    realpathSync: wrap(orig.realpathSync, 'realpathSync'),
     statSync: (...args: unknown[]) => {
       if (faults.statScript.length > 0) {
         faults.statCalls++;
@@ -112,8 +114,9 @@ describe('break: fs fault mapping', () => {
   it('stat non-ENOENT rethrows', () => {
     const dir = tmp();
     writeFileSync(join(dir, 'A'), 'v');
-    faults.map.set(join(dir, 'A'), { code: 'EPERM' });
-    expect(() => loadSecretsDir(dir)).toThrow(/statSync fault/);
+    // lstat is now the first gate in loadSecretsDir (symlink-safe iteration).
+    faults.map.set(join(dir, 'A'), { code: 'EPERM', fns: ['lstatSync'] });
+    expect(() => loadSecretsDir(dir)).toThrow(/lstatSync fault/);
   });
 
   it('read EACCES fails closed (missing secret never reads as {})', () => {
@@ -148,8 +151,10 @@ describe('break: watcher faults', () => {
     faults.fakeWatch = true;
     const schema = z.object({ a: z.string().default('x') });
     const sub = watchSettings({ schema, sources: [{ map: {} }], env: {}, expand: false, coerce: false });
+    expect(sub.version).toBe(0);
     await sub.dispose();
     await sub.dispose();
+    expect(sub.version).toBe(0);
   });
 
   it('watch callback filters by basename and tolerates null filenames', async () => {
@@ -183,6 +188,23 @@ describe('break: watcher faults', () => {
     for (const w of faults.watchers) w.onChange('rename', null);
     await new Promise((r) => setTimeout(r, 40));
     expect(updates).toBe(frozen);
+  });
+
+  it('errored watchers re-arm without dispose racing them', async () => {
+    faults.fakeWatch = true;
+    const dir = tmp();
+    const file = join(dir, 'rearm.json');
+    writeFileSync(file, JSON.stringify({ a: '1' }));
+    const schema = z.object({ a: z.string().default('x') });
+    const sub = watchSettings({ schema, sources: [file], env: {}, expand: false, coerce: false }, { debounceMs: 10 });
+    expect(faults.watchers.length).toBe(1);
+    for (const w of [...faults.watchers]) {
+      for (const fn of w.handlers['error'] ?? []) (fn as (...a: unknown[]) => void)(new Error('blip'));
+    }
+    // Deferred re-arm fires while live: the dir is watched again, no blind window.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(faults.watchers.length).toBe(2);
+    await sub.dispose();
   });
 });
 
@@ -296,10 +318,11 @@ describe('break: poll sources', () => {
     }
     expect(updates).toBeGreaterThanOrEqual(1);
     await sub.dispose();
-    // hasPollSources: {dir} and bare-{load} providers select the 60s default.
-    // (Sync loads only — watchSettings is sync; async providers need settingsAsync.)
+    // hasPollSources: providers select the 60s default. `{ dir }` now throws in
+    // core — resolve via loadSecretsDir() → `{ map }`, which is an ordinary map
+    // (no default polling; re-polling a dir is the caller's refreshMs job).
     const s2 = watchSettings(
-      { schema: z.object({ a: z.string().default('x') }), sources: [{ dir: '/x' } as never, { load: () => ({}), name: 'p' }], env: {}, expand: false, coerce: false },
+      { schema: z.object({ a: z.string().default('x') }), sources: [{ load: () => ({}), name: 'p' }], env: {}, expand: false, coerce: false },
       { debounceMs: 10000 },
     );
     await s2.dispose();

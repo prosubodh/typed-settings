@@ -6,8 +6,8 @@
  * @module
  */
 import type { Flat, SecretProvider } from '../types.js';
-import { ConfigError, byteLengthUtf8 } from '../errors.js';
-import { fetchWithRedirectGuard, getFetch, normalizeSecretMap, statusToCode, type FetchFn } from './shared.js';
+import { ConfigError } from '../errors.js';
+import { assertPositive, fetchWithRedirectGuard, getFetch, normalizeSecretMap, raceTimeout, readBodyCapped, statusToCode, timeoutSignal, type FetchFn } from './shared.js';
 
 /** Options for {@link hashicorpProvider}. */
 export interface HashicorpOptions {
@@ -45,6 +45,8 @@ export function hashicorpProvider(opts: HashicorpOptions): SecretProvider {
   const mount = (opts.mount ?? 'secret').replace(/^\/+|\/+$/g, '');
   const timeoutMs = opts.timeoutMs ?? 5000;
   const maxBytes = opts.maxBytes ?? 1024 * 1024;
+  assertPositive(timeoutMs, 'timeoutMs', 'hashicorp');
+  assertPositive(maxBytes, 'maxBytes', 'hashicorp');
   const name = `hashicorp://${mount}/${opts.path}`;
   let inflight: Promise<Flat> | null = null;
 
@@ -57,13 +59,15 @@ export function hashicorpProvider(opts: HashicorpOptions): SecretProvider {
     const url = `${base}/v1/${mount}/${p}${qs}`;
     const headers = new Headers();
     if (token) headers.set('X-Vault-Token', token);
-    headers.set('Accept', 'application/json');
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     let res: Response;
     try {
-      res = await fetchWithRedirectGuard(
-        url,
-        { headers, signal: AbortSignal.timeout(timeoutMs) },
-        fetchFn,
+      // Race the whole fetch: injected fetchFns routinely ignore `signal`.
+      res = await raceTimeout(
+        fetchWithRedirectGuard(url, { headers, signal: timeoutSignal(timeoutMs) }, fetchFn),
+        timeoutMs,
+        p,
+        name,
       );
     } catch (e) {
       if (e instanceof ConfigError) throw e;
@@ -79,10 +83,7 @@ export function hashicorpProvider(opts: HashicorpOptions): SecretProvider {
       // 403 never falls through — fail closed, no value
       throw new ConfigError([{ path: p, from: name, message: `${code}: HTTP ${res.status}` }], code);
     }
-    const text = await res.text();
-    if (byteLengthUtf8(text) > maxBytes) {
-      throw new ConfigError([{ path: p, from: name, message: 'E_TOO_LARGE: secret >cap' }], 'E_TOO_LARGE');
-    }
+    const text = await readBodyCapped(res, p, name, maxBytes, timeoutMs);
     let json: unknown;
     try {
       json = JSON.parse(text);
@@ -93,7 +94,7 @@ export function hashicorpProvider(opts: HashicorpOptions): SecretProvider {
     // Unwrap matrix: KVv2 envelopes carry a `metadata` sibling next to `data.data`;
     // a KVv1 secret that merely happens to contain a key named `data` must NOT unwrap.
     const isKv2 =
-      !!data && typeof data === 'object' && 'data' in data && 'metadata' in data;
+      !!data && typeof data === 'object' && Object.hasOwn(data, 'data') && Object.hasOwn(data, 'metadata');
     const inner = (isKv2 ? (data as { data?: unknown }).data : data) as Record<string, unknown> | undefined;
     if (!inner || typeof inner !== 'object' || Array.isArray(inner)) {
       throw new ConfigError([{ path: p, from: name, message: 'E_SHAPE: missing data' }], 'E_SHAPE');

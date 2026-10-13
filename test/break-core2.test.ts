@@ -24,9 +24,9 @@ describe('break2: file source spellings (sync)', () => {
       expect(settings({ schema: js, sources: [{ file: 'c.json' }], env: {}, expand: false, coerce: false }).a).toBe('file');
       const es = z.object({ b: z.coerce.number().default(0) });
       expect(settings({ schema: es, sources: [{ file: 'e.env' }], env: {}, expand: false }).b).toBe(2);
-      // {dir} is inert in core: resolve via loadSecretsDir() and pass {map} instead.
+      // {dir} is a usage error in core: resolve via loadSecretsDir() → {map}.
       const ds = z.object({ a: z.string().default('d') });
-      expect(settings({ schema: ds, sources: [{ dir: '/run/secrets' } as never], env: {}, expand: false, coerce: false }).a).toBe('d');
+      expect(() => settings({ schema: ds, sources: [{ dir: '/run/secrets' } as never], env: {}, expand: false, coerce: false })).toThrow(/E_USAGE/);
     } finally {
       uninject();
     }
@@ -66,7 +66,7 @@ describe('break2: file source spellings (sync)', () => {
 });
 
 describe('break2: async source parity', () => {
-  it('collects .env, text, map, dir and file sources like sync', async () => {
+  it('collects .env, text, map, provider and file sources like sync', async () => {
     inject({ '.env': 'DOTENV=yes', 'a.env': 'FROM_ENV_FILE=yes', 'c.json': JSON.stringify({ n: 5 }), 'q.env': 'Q=qval' });
     try {
       const prov = { name: 'p', load: async () => ({ P: 'v' }) };
@@ -84,7 +84,7 @@ describe('break2: async source parity', () => {
       const out = await settingsAsync({
         schema,
         sources: [
-          '.env', 'a.env', 'env', { text: 'T=textval' }, { map: { M: 'mval' } }, { map: undefined } as never, { dir: '/x' } as never,
+          '.env', 'a.env', 'env', { text: 'T=textval' }, { map: { M: 'mval' } }, { map: undefined } as never,
           'c.json', { file: 'c.json' }, { file: 'q.env' }, { BARE: 'b' } as never, { provider: prov },
         ],
         env: {},
@@ -114,6 +114,14 @@ describe('break2: async source parity', () => {
     } finally {
       uninject();
     }
+  });
+
+  it('{ dir } throws E_USAGE in async mode too (resolve first, pass { map })', async () => {
+    // Include an async provider so the true async collection path runs.
+    const prov = { name: 'p', load: async () => ({}) };
+    await expect(
+      settingsAsync({ schema: z.object({}), sources: [{ dir: '/run/secrets' } as never, { provider: prov }], env: {}, expand: false }),
+    ).rejects.toMatchObject({ code: 'E_USAGE' });
   });
 
   it('bad {text} in async mode is E_PARSE, not a raw error', async () => {

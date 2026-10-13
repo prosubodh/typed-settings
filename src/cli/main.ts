@@ -12,7 +12,7 @@ import { runWatch } from './watch.js';
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h') {
-    console.log(`typed-settings <check|init|gen|watch>\n\ncheck -s schema.ts -c base.yaml,.env [--strict] [--no-expand] [--array replace|concat|mergeIndex] [--format human|json]\ninit --lib zod|valibot|arktype|yup|joi --format yaml|toml|env [--force|--dry-run|--check]\ngen --schema src/config.ts --out .env.example --docs CONFIG.md\nwatch -s schema.ts -c base.yaml --once [--exit-on-error] [-- cmd...]`);
+    console.log(`typed-settings <check|init|gen|watch>\n\ncheck -s schema.ts -c base.yaml,.env [--strict] [--no-expand] [--array replace|concat|mergeIndex] [--format human|json] [--schema-export NAME] [--prefix PFX] [--secret-keys a,b]\ninit --lib zod|valibot|arktype|yup|joi --format yaml|toml|env [--dir .] [--force|--dry-run|--check]\ngen --schema src/config.ts --out .env.example --docs CONFIG.md [--schema-export NAME] [--prefix PFX] [--force]\nwatch -s schema.ts -c base.yaml [--strict] [--no-expand] [--array ...] [--format human|json] [--schema-export NAME] [--prefix PFX] [--secret-keys a,b] [--once] [--exit-on-error] [--exit-on-child-error] [-- cmd...]`);
     return 0;
   }
   try {
@@ -30,10 +30,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           format: { type: 'string', default: 'human' },
           'schema-export': { type: 'string' },
           prefix: { type: 'string' },
+          'secret-keys': { type: 'string' },
         },
       });
       if (!values.schema) {
-        console.error('Usage: check -s schema.ts -c base.yaml,.env');
+        console.error('E_USAGE: check -s schema.ts -c base.yaml,.env');
         return 2;
       }
       // parseArgs accepts any string — reject unknown enum values here (usage error).
@@ -54,6 +55,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         format: values.format as 'human' | 'json',
         schemaExport: values['schema-export'],
         prefix: values.prefix,
+        secretKeys: values['secret-keys']?.split(',').map((s) => s.trim()).filter(Boolean),
       });
     }
     if (cmd === 'init') {
@@ -81,7 +83,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const { values } = parseArgs({
         args: rest,
         options: {
-          schema: { type: 'string' },
+          schema: { type: 'string', short: 's' },
           'schema-export': { type: 'string' },
           out: { type: 'string' },
           docs: { type: 'string' },
@@ -90,7 +92,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         },
       });
       if (!values.schema) {
-        console.error('Usage: gen --schema src/config.ts --out .env.example --docs CONFIG.md');
+        console.error('E_USAGE: gen --schema src/config.ts --out .env.example --docs CONFIG.md');
         return 2;
       }
       return await runGen({
@@ -115,14 +117,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           strict: { type: 'boolean', default: false },
           expand: { type: 'boolean', default: true },
           array: { type: 'string', default: 'replace' },
+          format: { type: 'string', default: 'human' },
           once: { type: 'boolean', default: false },
           'exit-on-error': { type: 'boolean', default: false },
+          'exit-on-child-error': { type: 'boolean', default: false },
           'schema-export': { type: 'string' },
           prefix: { type: 'string' },
+          'secret-keys': { type: 'string' },
         },
       });
       if (values.array !== undefined && !['replace', 'concat', 'mergeIndex'].includes(values.array)) {
         console.error(`E_USAGE: --array must be replace|concat|mergeIndex (got ${JSON.stringify(values.array)})`);
+        return 2;
+      }
+      if (values.format !== undefined && !['human', 'json'].includes(values.format)) {
+        console.error(`E_USAGE: --format must be human|json (got ${JSON.stringify(values.format)})`);
         return 2;
       }
       return await runWatch({
@@ -132,24 +141,33 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         strict: values.strict,
         expand: values.expand,
         array: values.array as 'replace' | 'concat' | 'mergeIndex',
+        format: values.format as 'human' | 'json',
         prefix: values.prefix,
+        secretKeys: values['secret-keys']?.split(',').map((s) => s.trim()).filter(Boolean),
         once: values.once,
         exitOnError: values['exit-on-error'],
+        exitOnChildError: values['exit-on-child-error'],
         cmd: childCmd.length ? childCmd : undefined,
       });
     }
-    console.error(`unknown command: ${cmd}`);
+    console.error(`E_USAGE: unknown command: ${cmd}`);
     return 2;
   } catch (e) {
-    console.error((e as Error).message);
+    // Anything reaching here is a usage error: the runners (check/init/gen/
+    // watch) handle their own load/validation failures internally and return
+    // codes instead of throwing. What escapes is parseArgs rejecting flags.
+    console.error(`E_USAGE: ${(e as Error).message}`);
     return 2;
   }
 }
 
-/* v8 ignore next 6 -- process entry bootstrap: only runs as the real CLI binary. */
+/* v8 ignore next 9 -- process entry bootstrap: only runs as the real CLI binary. */
 const isDirect = process.argv[1]?.endsWith('main.js') || process.argv[1]?.endsWith('main.cjs');
 if (isDirect) {
   main().then((code) => {
     process.exitCode = code;
+  }).catch((e) => {
+    console.error(e?.message ?? e);
+    process.exitCode = 2;
   });
 }

@@ -1,6 +1,6 @@
 # Vault providers
 
-Three secret backends behind one small interface: `{ name, load() }`, where `load()` returns a flat map (or a promise of one). They all share the same posture: manual redirects (max 2, auth stripped when crossing hosts), a 5-second default timeout, roughly a megabyte of default body cap, single-flight `load()`, and errors that fail closed. For tests you inject `fetchFn` / `secretsClient` / `ssmClient` fakes, so no live servers are ever needed.
+Three secret backends behind one small interface: `{ name, load() }`, where `load()` returns a flat map (or a promise of one). They all share the same posture: manual redirects (max 2, auth stripped when crossing hosts *or* downgrading https→http, even on the same host), a 5-second default timeout covering headers *and* body reads, single-flight `load()`, and errors that fail closed. HTTP/HashiCorp cap bodies at 1 MiB by default; AWS caps Secrets Manager values at 64 KiB and SSM values at 8 KiB. For tests you inject `fetchFn` / `secretsClient` / `ssmClient` fakes, so no live servers are ever needed.
 
 ```ts
 import { settingsAsync } from 'typed-settings';
@@ -63,13 +63,15 @@ awsProvider({
 The SDKs are peers, not dependencies. Call `load()` without an injected client and you get `E_NO_SDK` telling you which package it expected. The SDK is never imported blindly.
 
 - **Secrets Manager.** A `SecretString` holding a JSON object merges into the map. Anything else becomes a single value keyed by the last path segment, uppercased (`prod/app` → `APP`). Both `SecretString` and `SecretBinary` present, or neither, is `E_SHAPE`. A string `SecretBinary` has to be valid base64; anything else would decode silently into garbage, so it's rejected.
+- **Collisions fail closed.** Two secrets whose last segments match, two JSON secrets emitting the same key, two SSM params stripping to the same key, or a param landing on a secret's key all throw `E_COLLISION`. Nothing is silently last-wins.
 - **SSM.** Called with `WithDecryption: true`. Parameters strip to the longest requested prefix (`/app/prod/a/b` under `/app/prod` becomes `A__B`), uppercased, with one trailing newline trimmed. A trailing slash on the request isn't required. Names that match nothing fall back to their basename; names that map to nothing are skipped rather than emitted as empty keys.
-- Client throws, sync or async, become `E_UPSTREAM`. Timeouts become `E_TIMEOUT`.
+- Client throws, sync or async, become `E_UPSTREAM`. Timeouts become `E_TIMEOUT`. `timeoutMs` is a whole-load budget shared by every secret and parameter call, so N slow backends fail in ~`timeoutMs` total, not N×. Late rejections after a timeout are suppressed (no unhandled-rejection crash). Binary secrets decode without `node:buffer` (Buffer → `atob` fallback); with neither available you get `E_NO_SDK` instead of garbage.
 
 ## Shared guards
 
-- Redirects are followed by hand (max 2). Crossing hosts strips *all* auth material (`authorization`, anything with `token`/`secret`/`api-key`, cookies), not just Vault's own headers. Running out of budget, or a `Location` that isn't a URL, is `E_REDIRECT`.
-- Status codes map to typed errors: `401`/`403` → `E_DENIED`, `404` → `E_NOT_FOUND`, `429` → `E_THROTTLED`, 5xx → `E_UPSTREAM`, anything else → `E_PROVIDER`. Timeouts and aborts are `E_TIMEOUT`, connection failures `E_CONN`, non-JSON bodies `E_PARSE`.
+- Redirects are followed by hand (max 2). Crossing hosts — or downgrading from `https` to a cleartext scheme, even on the same host — strips *all* auth material (`authorization`, anything with `token`/`secret`/`api-key`, cookies), not just Vault's own headers. Running out of budget, or a `Location` that isn't a URL, is `E_REDIRECT`.
+- Provider URLs in error messages are sanitized: `user:pass@` credentials and `?token=`-style parameters are stripped before the URL lands in an issue's `path`, so secrets never reach logs.
+- Status codes map to typed errors: `401`/`403` → `E_DENIED`, `404` → `E_NOT_FOUND`, `429` → `E_THROTTLED`, `408`/`504` → `E_TIMEOUT`, other 5xx → `E_UPSTREAM`, anything else → `E_PROVIDER`. Timeouts and aborts are `E_TIMEOUT`, connection failures `E_CONN`, non-JSON bodies `E_PARSE`.
 - `normalizeSecretMap` rejects non-object payloads (`E_SHAPE`), skips `null`/`undefined`, keeps nested objects for `__` expansion, and trims one trailing newline.
 
 ## Testing with providers

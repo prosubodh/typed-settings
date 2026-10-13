@@ -14,6 +14,9 @@ export function parseYamlText(text: string, from = 'yaml'): unknown {
   const docs = parseAllDocuments(stripped, {
     version: '1.2',
     uniqueKeys: true,
+    // Billion-laughs guard: cap alias expansion (2 MiB of nested anchors would
+    // otherwise expand to GBs before maxBytes can help).
+    maxAliasCount: 100,
   } as never).filter((d) => {
     if (d.errors.length > 0) return true;
     try {

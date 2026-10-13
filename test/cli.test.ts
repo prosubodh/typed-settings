@@ -33,9 +33,8 @@ describe('cli check', () => {
 
     const bad = join(dir, 'bad.json');
     writeFileSync(bad, JSON.stringify({ port: 'not-a-number-x' }));
-    // z.coerce.number() on garbage -> NaN -> invalid (1). If lib coerces leniently, accept 0/1.
-    const code = await runCheck({ schema, config: bad, expand: false, format: 'json' });
-    expect([0, 1]).toContain(code);
+    // z.coerce.number() on garbage -> NaN -> invalid, deterministically.
+    expect(await runCheck({ schema, config: bad, expand: false, format: 'json' })).toBe(1);
 
     expect(await runCheck({ schema: join(dir, 'missing.ts'), config: good })).toBe(2);
   });
@@ -80,4 +79,18 @@ describe('cli watch --once', () => {
     writeFileSync(cfg, JSON.stringify({ port: 5 }));
     expect(await runWatch({ schema, config: cfg, once: true })).toBe(0);
   });
+
+  it('supervises a real child process end to end', async () => {
+    const dir = localTmp('ts-cli-real');
+    const schema = join(dir, 'schema.ts');
+    writeFileSync(schema, SCHEMA_TS);
+    const cfg = join(dir, 'c.json');
+    writeFileSync(cfg, JSON.stringify({ port: 5 }));
+    // Unspawnable binary: the supervisor reports the failure and still shuts
+    // down cleanly on SIGTERM (no mocks — real spawn, real signals).
+    const p = runWatch({ schema, config: cfg, cmd: ['definitely-not-a-real-binary-xyz'] });
+    await new Promise((r) => setTimeout(r, 300));
+    process.emit('SIGTERM');
+    expect(await p).toBe(0);
+  }, 15000);
 });

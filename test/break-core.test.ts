@@ -437,9 +437,9 @@ describe('break: async parity', () => {
     expect(() => settings({ schema: fake as never, sources: [{ map: {} }], env: {} })).toThrow(/USE_ASYNC/);
   });
 
-  it('sync provider throwing synchronously propagates raw', () => {
-    // A provider whose load() throws synchronously violates the provider contract;
-    // settings() lets the raw error through (async callers wrap it as E_PROVIDER).
+  it('sync provider throwing synchronously wraps as E_PROVIDER', () => {
+    // Provider throws become ConfigError(E_PROVIDER) on both paths; the raw
+    // message is preserved inside the wrapped issue.
     const prov = {
       name: 'sync-boom',
       load: () => {
@@ -447,10 +447,17 @@ describe('break: async parity', () => {
       },
     };
     const schema = z.object({ a: z.string().default('x') });
-    expect(() => settings({ schema: schema as never, sources: [{ provider: prov }], env: {} })).toThrow('sync boom');
+    try {
+      settings({ schema: schema as never, sources: [{ provider: prov }], env: {} });
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      expect((e as ConfigError).code).toBe('E_PROVIDER');
+      expect((e as Error).message).toContain('sync boom');
+    }
   });
 
-  it('cyclic provider maps fail closed with E_CYCLE (no stack overflow)', () => {
+  it('cyclic provider maps fail closed with E_CIRCULAR (no stack overflow)', () => {
     const cyc: Record<string, unknown> = { a: '1' };
     cyc['self'] = cyc;
     const fake = { '~standard': { version: 1, vendor: 't', validate: (v: unknown) => ({ value: v }) } };
@@ -459,7 +466,7 @@ describe('break: async parity', () => {
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(ConfigError);
-      expect((e as ConfigError).code).toBe('E_CYCLE');
+      expect((e as ConfigError).code).toBe('E_CIRCULAR');
     }
     // Shared (DAG) references are fine — only true cycles throw.
     const shared = { x: '1' };
@@ -471,6 +478,16 @@ describe('break: async parity', () => {
       coerce: false,
     }) as Record<string, unknown>;
     expect((out['p'] as Record<string, unknown>)['x']).toBe('1');
+    // Nested cycles name the full dotted path, never ''.
+    const inner: Record<string, unknown> = { x: '1' };
+    inner['self'] = inner;
+    try {
+      settings({ schema: fake as never, sources: [{ map: { a: inner } } as never], env: {}, expand: false, coerce: false });
+      expect.unreachable();
+    } catch (e) {
+      expect((e as ConfigError).code).toBe('E_CIRCULAR');
+      expect((e as ConfigError).issues[0]?.path).toBe('a.self');
+    }
   });
 });
 
@@ -497,12 +514,31 @@ describe('break: coercion and keys', () => {
     }
   });
 
-  it('prefix APP does not require a segment boundary (pinned)', () => {
-    // 'APPLE' matches prefix 'APP' with remainder 'LE' — remainder-non-empty rule.
-    expect(stripPrefix('APPLE', 'APP')).toBe('LE');
+  it('prefix requires a segment boundary (APP never strips APPLE)', () => {
+    // 'APPLE' no longer matches prefix 'APP': only boundary-stripped keys
+    // (APP_FOO, APP__FOO, app_foo) qualify — mid-word cuts are dropped keys.
+    expect(stripPrefix('APPLE', 'APP')).toBeNull();
     expect(stripPrefix('APP', 'APP')).toBeNull();
+    expect(stripPrefix('APP_FOO', 'APP')).toBe('_FOO');
+    expect(stripPrefix('app_foo', 'APP')).toBe('_foo');
+    expect(stripPrefix('APP_', 'APP_')).toBeNull();
     expect(stripPrefix('OTHER', 'APP')).toBeNull();
     expect(stripPrefix('a', undefined)).toBe('a');
+  });
+
+  it('stripFlatKey applies the same boundary rule to flat sources', () => {
+    // Through settings: 'APP_FOO' survives (rest starts with '_'), while
+    // 'APPLE' is a mid-word cut and must be dropped, never silently truncated.
+    const out = settings({
+      schema: z.object({}).passthrough(),
+      sources: [{ map: { APP_FOO: 'a', APPLE: 'b' } }],
+      env: {},
+      expand: false,
+      coerce: false,
+      prefix: 'APP',
+    }) as Record<string, unknown>;
+    expect(out['_foo']).toBe('a');
+    expect(out['apple']).toBeUndefined();
   });
 
   it('unknownKeys preserve keeps extras, reject fires', () => {

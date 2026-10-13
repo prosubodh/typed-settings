@@ -6,9 +6,11 @@ import { redactValue } from '../src/errors.js';
 const SECRET = 'sk-live-abc123XYZ789';
 
 describe('secret redaction', () => {
-  it('redactValue masks long secrets, fully hides short ones', () => {
-    expect(redactValue('apiKey', SECRET)).toContain('***');
+  it('redactValue fully hides secrets — no prefix fragment leaks', () => {
+    expect(redactValue('apiKey', SECRET)).toBe('(redacted: 20 chars)');
     expect(redactValue('apiKey', SECRET)).not.toContain(SECRET);
+    // Even the first characters must not survive (the old `abc-***` shape leaked them).
+    expect(redactValue('apiKey', SECRET)).not.toContain(SECRET.slice(0, 3));
     expect(redactValue('token', 'short')).toBe('(redacted)');
     expect(redactValue('port', '3000')).toBe('3000'); // non-secret keys untouched
   });

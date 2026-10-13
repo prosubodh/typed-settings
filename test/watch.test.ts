@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
-import { settings } from '../src/index.js';
+import { settings, ConfigError } from '../src/index.js';
 import { watchSettings } from '../src/node.js';
 
 function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -90,6 +90,6 @@ describe('watchSettings', () => {
   it('initial settings still throws sync on invalid', () => {
     expect(() =>
       settings({ schema: z.object({ port: z.number() }), sources: [{ map: {} }], env: {}, expand: false }),
-    ).toThrow();
+    ).toThrow(ConfigError);
   });
 });

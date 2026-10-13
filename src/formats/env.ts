@@ -21,9 +21,38 @@ export function parseEnvText(text: string): Record<string, string> {
       throw new Error(`ParseError: bare key without '=': ${JSON.stringify(line)}`);
     }
     const key = line.slice(0, eq).trim();
-    let rest = line.slice(eq + 1).trimStart();
+    const rest = line.slice(eq + 1).trimStart();
     if (!key) throw new Error('ParseError: empty key');
-    out[key] = parseValue(rest);
+    const { value, quoted } = parseValue(rest, line);
+    // Quoted values are literal groups: commas inside them must not become
+    // array splits downstream, so they travel `\,`-escaped (see coerce.ts).
+    // JSON-shaped values are exempt — `'{"a":1}'` still parses to an object.
+    out[key] = quoted && !looksJson(value) ? escapeCommas(value) : value;
+  }
+  return out;
+}
+
+/** Trimmed `{...}`/`[...]` shape (the coerce stage's JSON probe, mirrored). */
+function looksJson(s: string): boolean {
+  const t = s.trim();
+  return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
+}
+
+/** Escapes bare commas, preserving existing `\,` escapes verbatim. */
+function escapeCommas(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\' && i + 1 < s.length) {
+      out += c + s[i + 1];
+      i++;
+      continue;
+    }
+    if (c === ',') {
+      out += '\\,';
+      continue;
+    }
+    out += c;
   }
   return out;
 }
@@ -74,13 +103,15 @@ function countUnescapedQuotes(s: string): number {
   return n;
 }
 
-function parseValue(rest: string): string {
-  if (!rest) return '';
+function parseValue(rest: string, line: string): { value: string; quoted: boolean } {
+  if (!rest) return { value: '', quoted: false };
   if (rest.startsWith("'")) {
     const end = rest.indexOf("'", 1);
     if (end === -1) throw new Error('ParseError: unterminated single-quoted value');
-    // '' literal, no escapes, trailing must be comment/empty
-    return rest.slice(1, end);
+    // '' literal, no escapes. Anything past the closing quote must be a
+    // comment or nothing — trailing garbage is a paste error, not a value.
+    assertQuotedTail(rest.slice(end + 1), line);
+    return { value: rest.slice(1, end), quoted: true };
   }
   if (rest.startsWith('"')) {
     // Find closing unescaped quote
@@ -102,13 +133,21 @@ function parseValue(rest: string): string {
       i++;
     }
     if (rest[i] !== '"') throw new Error('ParseError: unterminated double-quoted value');
-    return val;
+    assertQuotedTail(rest.slice(i + 1), line);
+    return { value: val, quoted: true };
   }
   if (rest.startsWith('`')) throw new Error('ParseError: backtick values not supported');
   // Unquoted: strip trailing comment gated on whitespace
   const hash = findCommentStart(rest);
   const v = (hash === -1 ? rest : rest.slice(0, hash)).trim();
-  return v;
+  return { value: v, quoted: false };
+}
+
+/** Rejects trailing garbage after a closing quote (whitespace/comment only). */
+function assertQuotedTail(tail: string, line: string): void {
+  if (!/^\s*(#.*)?$/.test(tail)) {
+    throw new Error(`ParseError: trailing characters after quoted value: ${JSON.stringify(line)}`);
+  }
 }
 
 function findCommentStart(s: string): number {

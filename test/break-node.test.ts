@@ -20,6 +20,21 @@ describe('break: loadEnvFiles', () => {
   it('non-ENOENT read errors propagate raw (never swallowed)', () => {
     expect(() => loadEnvFiles(['bad\0path.env'])).toThrow(TypeError);
   });
+
+  it('caps env text size per file and cumulatively (E_FILE_TOO_LARGE)', () => {
+    const dir = tmp();
+    const a = join(dir, 'a.env');
+    const b = join(dir, 'b.env');
+    writeFileSync(a, 'A=1111'); // 6 bytes
+    writeFileSync(b, 'B=2222'); // 6 bytes
+    expect(() => loadEnvFiles([a], { maxBytes: 4 })).toThrow(/E_FILE_TOO_LARGE/);
+    expect(() => loadEnvFiles([a, b], { maxBytes: 8 })).toThrow(/E_FILE_TOO_LARGE/);
+    expect(loadEnvFiles([a, b], { maxBytes: 12 }).text).toBe('A=1111\nB=2222');
+  });
+
+  it('rejects a non-positive cap as E_USAGE', () => {
+    expect(() => loadEnvFiles([], { maxBytes: 0 })).toThrow(/E_USAGE/);
+  });
 });
 
 describe('break: loadSecretsDir', () => {
@@ -39,11 +54,11 @@ describe('break: loadSecretsDir', () => {
   });
 
   it('missing dir is {}, file-as-dir and bad paths throw', () => {
-    expect(loadSecretsDir(join(tmpdir(), `nope-${Date.now()}`))).toEqual({});
+    expect(loadSecretsDir(join(tmpdir(), `nope-${process.pid}-${Date.now()}`))).toEqual({});
     const dir = tmp();
     const file = join(dir, 'f.env');
     writeFileSync(file, 'x');
-    expect(() => loadSecretsDir(file)).toThrow(); // ENOTDIR, not ENOENT
+    expect(() => loadSecretsDir(file)).toThrow(/ENOTDIR/); // not ENOENT: fail closed
     expect(() => loadSecretsDir('bad\0dir')).toThrow(TypeError);
   });
 });

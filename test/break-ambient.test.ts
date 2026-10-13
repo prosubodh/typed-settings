@@ -9,16 +9,14 @@ describe('ambient process.env: $ never crashes config load', () => {
     expect(cfg.prompt).toBe('$P$G');
   });
 
-  it('self-referencing env values pass through literally', () => {
+  it('self-referencing env values throw like file values (cycles are typos)', () => {
     const schema = z.object({ a: z.string() });
-    const cfg = settings({ schema, sources: ['env'], env: { A: '${A}' }, expand: true });
-    expect(cfg.a).toBe('${A}');
+    expect(() => settings({ schema, sources: ['env'], env: { A: '${A}' }, expand: true })).toThrow(/E_CIRCULAR/);
   });
 
-  it('bash := keeps a literal instead of E_BAD_OP on env-layer values', () => {
+  it('bash := throws E_BAD_OP on env-layer values too', () => {
     const schema = z.object({ weird: z.string() });
-    const cfg = settings({ schema, sources: ['env'], env: { WEIRD: '${P:=x}' } });
-    expect(cfg.weird).toBe('${P:=x}');
+    expect(() => settings({ schema, sources: ['env'], env: { WEIRD: '${P:=x}' } })).toThrow(/E_BAD_OP/);
   });
 
   it('env-layer values still expand when references do resolve', () => {

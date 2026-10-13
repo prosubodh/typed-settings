@@ -145,12 +145,12 @@ The full list of spellings:
 | `'config.yaml'` (any path) | structured file if the extension is `.json`/`.yaml`/`.yml`/`.toml`, dotenv format otherwise |
 | `{ text: 'PORT=1' }` | dotenv text, inline |
 | `{ file: 'path/to/x.yaml' }` | explicit file source |
-| `{ dir: '/run/secrets' }` | secrets dir. Core ignores this on purpose (it never touches directories); read it with `loadSecretsDir()` from `typed-settings/node` and pass the result back as `{ map }` |
+| `{ dir: '/run/secrets' }` | secrets dir. Core rejects this with `E_USAGE` on purpose (it never touches directories, so a `{ dir }` source would silently contribute nothing); read it with `loadSecretsDir()` from `typed-settings/node` and pass the result back as `{ map }` |
 | `{ map: {...}, prefix?: 'X_' }` | inline values, with an optional per-source prefix |
 | `{ provider, prefix? }` or bare provider | vault provider. Async ones require `settingsAsync()` |
 | `{ PORT: 1 }` (plain object) | inline values. (An object with a non-function `load` key counts as data, not a provider) |
 
-`prefix` strips case-insensitively and exactly once, so `APP_PORT` becomes `port` with `prefix: 'APP_'`. Double underscores nest (`APP_DB__URL` → `db.url`) and `ARR__0`, `ARR__1` fold into arrays. The edge cases are in [docs/syntax.md](docs/syntax.md); all the options in [docs/configuration.md](docs/configuration.md).
+`prefix` strips case-insensitively and exactly once, so `APP_PORT` becomes `port` with `prefix: 'APP_'`. It only strips at a segment boundary: `prefix: 'APP'` strips `APP_FOO` but leaves `APPLE` alone (the key is dropped, never cut down to `le`). Double underscores nest (`APP_DB__URL` → `db.url`) and `ARR__0`, `ARR__1` fold into arrays. The edge cases are in [docs/syntax.md](docs/syntax.md); all the options in [docs/configuration.md](docs/configuration.md).
 
 Node helpers (`typed-settings/node`):
 
@@ -194,8 +194,10 @@ Provider details: [docs/vault.md](docs/vault.md).
 | `arrayStrategy` | `replace \| concat \| mergeIndex` | `'replace'` | how arrays merge across layers |
 | `unknownKeys` | `strip \| preserve \| reject` | `'strip'` | `reject` throws `E_UNKNOWN_KEY` |
 | `freeze` | `boolean` | `true` | deep-freeze the result |
-| `timeoutMs` | `number` | `5000` | async only: provider loads and async validation race this |
+| `timeoutMs` | `number` | `5000` | async only: whole-collection provider deadline + async validation race |
 | `maxBytes` | `number` | `2 MiB` | per-file read cap, counted in UTF-8 bytes |
+| `secretKeys` | `(string\|RegExp)[]` | default pattern | extra secret matchers for error + `check --json` redaction |
+| `fs` | `{ readFileSync, statSync? }` | node hook / require | injectable filesystem for file sources |
 
 Full semantics for each: [docs/configuration.md](docs/configuration.md).
 
@@ -219,7 +221,7 @@ settings({ schema: yupAdapter(userSchema), sources: ['env'] });
 
 ## Secrets & redaction
 
-Keys looking like secrets (`key`, `secret`, `token`, `password`, `private`, case-insensitive) get special treatment in errors: the value never appears, neither raw nor base64'd. You see `(redacted)` instead. More in [docs/errors.md](docs/errors.md).
+Keys looking like secrets (`key`, `secret`, `token`, `password`, `private`, case-insensitive) get special treatment in errors: the value never appears, neither raw nor base64'd — not even a three-character preview survives. Short values read `(redacted)`, longer ones `(redacted: N chars)`. More in [docs/errors.md](docs/errors.md).
 
 ## CLI
 
@@ -234,7 +236,7 @@ npx typed-settings watch -s src/settings.ts -c base.yaml -- node server.js
 |---|---|---|
 | `check` | validate config against a schema (`--strict`, `--no-expand`, `--array`, `--format human\|json`) | 0 valid · 1 invalid · 2 load/usage problem |
 | `init` | scaffold `src/settings.ts` plus an example file (`--force`, `--dry-run`, `--check`) | 0 ok · 2 error or drift |
-| `gen` | generate `.env.example` + `CONFIG.md` from a schema (`--force`) | 0 ok · 2 load problem or file exists |
+| `gen` | generate `.env.example` + `CONFIG.md` from a schema (`--force`) | 0 ok · 2 load problem, file exists, or symlink |
 | `watch` | validate once (`--once`) or supervise and restart `-- cmd` | 0 ok · 1 invalid · 2 load/usage problem |
 
 Flags and schema-export resolution: [docs/cli.md](docs/cli.md).
@@ -286,6 +288,7 @@ Things people actually hit, in rough order of frequency:
 - **`E_UNKNOWN_KEY`.** Extra keys with `unknownKeys: 'reject'` (the CLI calls this `--strict`). Either drop the keys or switch to `strip` / `preserve`.
 - **`SCHEMA_LOAD_ERROR`.** The CLI can't find your schema. Export it under the name `schema`, or point at it with `--schema-export NAME`.
 - **`E_CIRCULAR`.** Two variables reference each other (`A=${B}`, `B=${A}`). Unwind the cycle.
+- **`E_EXPAND` vs `E_PARSE`.** `E_EXPAND` is a malformed `${}` in a *value* (`A=${B` with no closing brace) — fix the value, and `check` exits `1`. `E_PARSE` is a *document* that wouldn't parse (a bad YAML/JSON/TOML/`.env` file, or a vault response body) — it carries the filename and `check` exits `2`.
 
 Every code is listed with a fix in [docs/errors.md](docs/errors.md).
 
@@ -294,7 +297,7 @@ Every code is listed with a fix in [docs/errors.md](docs/errors.md).
 ```sh
 npm install
 npm run typecheck   # tsc --noEmit
-npm test            # vitest - 309 tests, 100% lines/branches/functions/statements enforced
+npm test            # vitest - 441 tests, 100% lines/branches/functions/statements enforced
 npm run build       # tsup (ESM + CJS + DTS)
 npm run size        # bundle budgets (tracking only)
 ```

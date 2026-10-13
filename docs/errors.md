@@ -27,26 +27,29 @@ try {
 | `E_INVALID_CONFIG` | validation failed (the default envelope) | read `issues`, fix values or schema |
 | `E_UNKNOWN_KEY` | extra keys with `unknownKeys: 'reject'` | remove the keys, or use `strip`/`preserve` |
 | `E_UNRESOLVED` | a `$VAR` points at nothing | set it, add `${VAR:-default}`, or pass `allowUnresolved: true` |
-| `E_CIRCULAR` | variables reference each other (`A=${B}`, `B=${A}`) | unwind the cycle |
+| `E_CIRCULAR` | variables reference each other (`A=${B}`, `B=${A}`), or a cyclic in-memory value (a map, or YAML anchors) | unwind the cycle |
 | `E_BAD_OP` | `${A:=x}` / `${A:?x}` (only `:-` and `-` exist) | use a supported operator |
-| `E_PARSE` | broken file syntax, filename attached | fix the file |
-| `E_PROTO` | a `__proto__`/`constructor`/`prototype` key showed up | rename it. These are never merged quietly |
-| `E_CYCLE` | a cyclic value in memory (a map, or YAML anchors) | remove the cycle |
-| `E_EMPTY_SEGMENT` | `A____B` double separator | fix the key |
+| `E_EXPAND` | malformed expansion syntax in a value (an unterminated `${FOO`) | close the brace, or escape it (`$$`/`\$`) |
+| `E_PARSE` | a document failed to parse — a config file (env/yaml/toml/json) or a vault response body. The filename/URL is attached | fix the file, or check the backend |
+| `E_PROTO` | an exact `__proto__` key showed up (flat or from JSON) | rename it. It's the only key that can hijack an assignment; `constructor`/`prototype` are ordinary data keys |
+| `E_BAD_KEY` | an authored key has characters outside `[A-Za-z0-9_]` | rename it, or bridge it with `envMap`. The ambient `'env'` layer skips such keys instead |
+| `E_COLLISION` | two keys claim one path, or a scalar blocks a subtree (also: two vault/SSM secrets mapping to one key) | rename one; keys are case-insensitive |
 | `E_ARRAY_MIX` | scalar/list next to indexed keys (or indexed next to named) in one layer | pick one shape per layer |
 | `E_SPARSE_ARRAY` | indexed gaps (`__0` plus `__2`, no `__1`) | fill in the indexes |
 | `E_ARRAY_CAP` | over 1024 indexed elements | restructure the data |
-| `E_NO_FS` | a file source under ESM without `typed-settings/node` | import it, or use `{ text }`/`{ map }` |
+| `E_NO_FS` | a file source under ESM without `typed-settings/node` | import it, pass `opts.fs`, or use `{ text }`/`{ map }` |
+| `E_DEPTH` | hostile nesting depth — structured data, or `${}` defaults nested past the lexical cap (stack exhaustion guard) | shrink the payload; check for generated indicators |
+| `E_USAGE` | a nonsensical option (`maxBytes`/`timeoutMs` not positive finite) | fix the option |
 | `E_FILE_TOO_LARGE` | a file over `maxBytes` | raise the cap or shrink the file |
 | `USE_ASYNC` | async provider or schema met sync `settings()` | switch to `settingsAsync()`. Branch on `error.code`, never on the message text |
-| `E_TIMEOUT` | a provider or async validation outran `timeoutMs` | raise it, or fix the backend |
+| `E_TIMEOUT` | a provider or async validation outran `timeoutMs` (HTTP `408`/`504` included) | raise it, or fix the backend |
 | `E_PROVIDER` | a provider threw a plain error | read the wrapped message |
 | `E_DENIED` | HTTP 401/403 from a secret backend | fix credentials. Fails closed; no partial values |
 | `E_NOT_FOUND` | HTTP 404 | fix the path |
 | `E_THROTTLED` | HTTP 429 | back off |
 | `E_UPSTREAM` | HTTP 5xx or an AWS client failure | check the backend |
 | `E_CONN` | connection failure | check network and URL |
-| `E_PARSE` (vault) | backend returned non-JSON | check the backend |
+| `E_PARSE` (vault) | backend returned non-JSON (same code as a bad config file — both are "a document didn't parse") | check the backend |
 | `E_SHAPE` | unexpected secret shape (including `SecretString XOR SecretBinary` violations) | check the secret's format |
 | `E_TOO_LARGE` | a secret over the provider's cap | raise the cap |
 | `E_REDIRECT` | too many redirects, or a `Location` that isn't a URL | check the URL |
@@ -56,9 +59,10 @@ try {
 | `E_LOAD` | `check` hit a non-config load error | read the message |
 | `E_USAGE` | bad CLI flags or values | read `--help` |
 | `E_EXISTS` | `gen` refusing to overwrite without `--force` | pass `--force` |
+| `E_SYMLINK` | `gen` refusing to write through a symlink (even with `--force`) | point `--out`/`--docs` at a real path |
 
 CLI-only: `GEN_BEST_EFFORT` means a non-Zod schema was described on a best-effort basis. Treat the output as a draft.
 
 ## Redaction
 
-Issues on secret-looking keys (`key`, `secret`, `token`, `password`, `private`, any case) never carry the value. Both the raw string and its base64 get scrubbed from the message and replaced with `(redacted)` (short values collapse entirely; longer ones show a `abc-*** (N chars)` shape). This holds on sync and async paths, down nested and array paths, and even when the message echoes the value back (like a custom refinement saying what it received).
+Issues on secret-looking keys (`key`, `secret`, `token`, `password`, `private`, any case, plus `secretKeys` extras) never carry the value. When a message echoes a secret back (a custom refinement reporting what it received), the raw string and its base64 are scrubbed out and replaced with `(redacted)` — or `(redacted: N chars)` for values over 8 characters. No prefix fragment ever survives; the old three-character preview is gone. This holds on sync and async paths, down nested and array paths. Non-string leaves (numbers, booleans) are stringified for the scrub; values under 4 characters are skipped by the equality scrub (blanking every `a` or `12` would corrupt the message) but stay tagged `(redacted)`.

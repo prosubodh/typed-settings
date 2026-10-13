@@ -54,8 +54,21 @@ export async function loadSchema(schemaPath: string, exportName?: string): Promi
   // NOTE: no `isStandard(mod)` fallthrough — jiti always returns a module
   // namespace object (CJS `module.exports = schema` surfaces under
   // `default`/`module.exports` keys), so the module itself is never a schema.
-  const first = Object.values(mod).find((v) => isStandard(v));
-  if (first) return first as StandardSchemaV1;
+  const standards = Object.values(mod).filter((v) => isStandard(v));
+  if (standards.length > 1) {
+    // Ambiguous: two schemas, no priority winner (schema/settingsSchema/default
+    // all missed). Guessing validates the wrong schema quietly — require --schema-export.
+    // Names included so the fix is one read, not a guessing game.
+    const names = Object.entries(mod)
+      .filter(([, v]) => isStandard(v))
+      .map(([k]) => k);
+    const err = new Error(
+      `SCHEMA_LOAD_ERROR: ${standards.length} Standard Schema exports in ${abs} (${names.join(', ')}) — pass --schema-export NAME to pick one`,
+    );
+    (err as { code?: string }).code = 'SCHEMA_LOAD_ERROR';
+    throw err;
+  }
+  if (standards[0]) return standards[0] as StandardSchemaV1;
   const err = new Error(`SCHEMA_LOAD_ERROR: no Standard Schema export in ${abs} (tried default/schema/settingsSchema)`);
   (err as { code?: string }).code = 'SCHEMA_LOAD_ERROR';
   throw err;

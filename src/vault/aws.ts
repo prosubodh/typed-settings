@@ -7,7 +7,7 @@
  */
 import type { Flat, SecretProvider } from '../types.js';
 import { ConfigError, byteLengthUtf8 } from '../errors.js';
-import { normalizeSecretMap } from './shared.js';
+import { assertPositive, normalizeSecretMap } from './shared.js';
 
 /** Minimal Secrets Manager surface this provider needs (real SDK client or a fake). */
 export interface AwsSecretsClient {
@@ -29,9 +29,9 @@ export interface AwsProviderOptions {
   /** SSM names or path prefixes (trailing `/` optional). */
   params?: string[]; // SSM paths (exact names or path prefixes ending in /)
   /** Reserved: region override (currently from env `AWS_REGION`). */
-  region?: string; // from env AWS_REGION if omitted
+  region?: string; // IGNORED: configure region on your injected SDK client instead
   /** Reserved: VersionId / stage pin. */
-  versionId?: string; // pin VersionId / stage
+  versionId?: string; // IGNORED: version pinning is not implemented; latest is always read
   /** Applies to the whole `load()`. Default 5000. */
   timeoutMs?: number; // default 5000 (applies to load())
   /** Injected Secrets Manager client (or test fake); missing throws `E_NO_SDK`. */
@@ -52,6 +52,10 @@ async function withTimeout<T>(p: Promise<T>, ms: number, name: string): Promise<
       ms,
     );
   });
+  // Suppress unhandled rejection if the timeout wins and the client call
+  // settles later (fatal under --unhandled-rejections=strict otherwise).
+  // The race below still observes the original outcome.
+  void p.catch(() => {});
   try {
     return await Promise.race([p, timeout]);
   } finally {
@@ -79,14 +83,36 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 function decodeBinary(b: Uint8Array | string, path: string, from: string): string {
   if (typeof b === 'string') {
     // SecretBinary-as-string must be valid base64 — garbage would decode silently.
-    // The alphabet + length guards make Buffer.from infallible below (no try/catch).
+    // The alphabet + length guards make decoding infallible below (no try/catch).
     const compact = b.replace(/\s/g, '');
     if (!BASE64_RE.test(compact) || compact.length % 4 !== 0) {
       throw new ConfigError([{ path, from, message: 'E_SHAPE: SecretBinary is not valid base64' }], 'E_SHAPE');
     }
-    return Buffer.from(compact, 'base64').toString('utf8');
+    return utf8FromBase64(compact);
   }
-  return Buffer.from(b).toString('utf8');
+  const g = globalThis as { Buffer?: { from(b: Uint8Array, e: string): { toString(e: string): string } } };
+  if (g.Buffer) return g.Buffer.from(b, 'binary').toString('utf8');
+  // Non-UTF8 bytes must not silently become U+FFFD replacement characters
+  // stored as if they were the secret: fail closed instead.
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(b);
+  } catch {
+    throw new ConfigError([{ path, from, message: 'E_SHAPE: SecretBinary is not valid UTF-8' }], 'E_SHAPE');
+  }
+}
+
+/** Base64 -> UTF-8 without `node:buffer` (Edge-safe: Buffer -> atob fallback). */
+function utf8FromBase64(compact: string): string {
+  const g = globalThis as { Buffer?: { from(s: string, e: string): { toString(e: string): string } }; atob?: (s: string) => string };
+  if (g.Buffer) return g.Buffer.from(compact, 'base64').toString('utf8');
+  if (g.atob) {
+    const bin = g.atob(compact);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+  // No decoder available — fail closed, never return garbage.
+  throw new ConfigError([{ path: '<aws>', from: 'aws', message: 'E_NO_SDK: no base64 decoder (Buffer/atob) available' }], 'E_NO_SDK');
 }
 
 /**
@@ -99,7 +125,12 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
   const timeoutMs = opts.timeoutMs ?? 5000;
   const maxSecret = opts.maxBytesSecret ?? 64 * 1024;
   const maxParam = opts.maxBytesParam ?? 8 * 1024;
+  assertPositive(timeoutMs, 'timeoutMs', name);
+  assertPositive(maxSecret, 'maxBytesSecret', name);
+  assertPositive(maxParam, 'maxBytesParam', name);
   let inflight: Promise<Flat> | null = null;
+  // Whole-load budget share: set when doLoad starts (always assigned before use).
+  let remainingMs!: () => number;
 
   async function loadSecrets(): Promise<Flat> {
     const out: Flat = {};
@@ -113,23 +144,27 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
     for (const id of opts.secrets) {
       let raw: { SecretString?: string; SecretBinary?: Uint8Array | string } | string;
       try {
-        raw = await withTimeout(deferred(() => opts.secretsClient!.getSecretValue(id)), timeoutMs, name);
+        raw = await withTimeout(deferred(() => opts.secretsClient!.getSecretValue(id)), remainingMs(), name);
       } catch (e) {
         wrapClientError(e, id, name);
       }
       if (typeof raw === 'string') {
         if (byteLengthUtf8(raw) > maxSecret) throw new ConfigError([{ path: id, from: name, message: 'E_TOO_LARGE' }], 'E_TOO_LARGE');
-        // Try JSON object merge, else single value keyed by last segment
+        // Try JSON object merge, else single value keyed by last segment.
+        // (JSON.parse is iterative in V8 — hostile depth parses fine and any
+        // nesting is bounded downstream by the pipeline's E_DEPTH guard.)
+        // Only the parse is guarded: an E_COLLISION from the merge must escape.
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(raw) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            Object.assign(out, normalizeSecretMap(parsed, `${name}/${id}`));
-            continue;
-          }
+          parsed = JSON.parse(raw) as unknown;
         } catch {
-          // fall through to raw
+          parsed = undefined; // not JSON — the raw string is the value
         }
-        out[lastSegment(id)] = raw.replace(/\r?\n$/, '');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          mergeOrThrow(out, normalizeSecretMap(parsed, `${name}/${id}`), `${name}/${id}`);
+          continue;
+        }
+        emitSecret(out, id, raw);
         continue;
       }
       const { SecretString, SecretBinary } = raw;
@@ -141,20 +176,22 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
       }
       if (SecretString !== undefined) {
         if (byteLengthUtf8(SecretString) > maxSecret) throw new ConfigError([{ path: id, from: name, message: 'E_TOO_LARGE' }], 'E_TOO_LARGE');
+        // Only the parse is guarded: an E_COLLISION from the merge must escape.
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(SecretString) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            Object.assign(out, normalizeSecretMap(parsed, `${name}/${id}`));
-            continue;
-          }
+          parsed = JSON.parse(SecretString) as unknown;
         } catch {
-          // raw string
+          parsed = undefined; // plain strings stay raw (see note above)
         }
-        out[lastSegment(id)] = SecretString.replace(/\r?\n$/, '');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          mergeOrThrow(out, normalizeSecretMap(parsed, `${name}/${id}`), `${name}/${id}`);
+          continue;
+        }
+        emitSecret(out, id, SecretString);
       } else if (SecretBinary !== undefined) {
         const decoded = decodeBinary(SecretBinary, id, name);
         if (byteLengthUtf8(decoded) > maxSecret) throw new ConfigError([{ path: id, from: name, message: 'E_TOO_LARGE' }], 'E_TOO_LARGE');
-        out[lastSegment(id)] = decoded.replace(/\r?\n$/, '');
+        emitSecret(out, id, decoded);
       }
     }
     return out;
@@ -164,6 +201,33 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
   function lastSegment(id: string): string {
     const segs = id.split('/').filter((s) => s.length > 0);
     return (segs.length > 0 ? segs[segs.length - 1]! : id).toUpperCase();
+  }
+
+  /** Stores one secrets-manager value, skipping unmappable (empty) keys. */
+  function emitSecret(out: Flat, id: string, value: string): void {
+    const key = lastSegment(id);
+    // An empty id (or all-slash id) maps to '': emitting it would poison
+    // downstream prefix/__ handling, so skip it instead.
+    if (!key) return;
+    setOrThrow(out, key, value.replace(/\r?\n$/, ''), id);
+  }
+
+  /** One key, one owner: duplicate mappings must fail closed, never last-wins. */
+  function setOrThrow(out: Flat, key: string, value: string, from: string): void {
+    if (key in out) {
+      throw new ConfigError(
+        [{ path: key, from, message: 'E_COLLISION: two secrets/params map to the same key — rename one or narrow the params prefix' }],
+        'E_COLLISION',
+      );
+    }
+    out[key] = value;
+  }
+
+  /** Collision-aware merge for multi-key payloads (JSON secrets, SSM maps). */
+  function mergeOrThrow(out: Flat, add: Flat, from: string): void {
+    // normalizeSecretMap/SSM maps never carry undefined values (`null`/`undefined`
+    // entries are dropped upstream) — the `!` is a Flat-shape shim, not a coercion.
+    for (const [k, v] of Object.entries(add)) setOrThrow(out, k, v!, from);
   }
 
   function stripParamPrefix(paramName: string, requested: string[]): string {
@@ -202,7 +266,7 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
     try {
       map = await withTimeout(
         deferred(() => opts.ssmClient!.getParameters(opts.params!, true)),
-        timeoutMs,
+        remainingMs(),
         name,
       );
     } catch (e) {
@@ -212,14 +276,22 @@ export function awsProvider(opts: AwsProviderOptions): SecretProvider {
       if (byteLengthUtf8(value) > maxParam) throw new ConfigError([{ path: fullName, from: name, message: 'E_TOO_LARGE' }], 'E_TOO_LARGE');
       const key = stripParamPrefix(fullName, opts.params!).toUpperCase();
       if (!key) continue; // unmappable name (e.g. the queried prefix itself) — never emit ''
-      out[key] = value.replace(/\r?\n$/, '');
+      setOrThrow(out, key, value.replace(/\r?\n$/, ''), fullName);
     }
     return out;
   }
 
   async function doLoad(): Promise<Flat> {
+    // Whole-load budget: N secrets + SSM share one `timeoutMs` deadline instead
+    // of each getting a full budget (N*timeoutMs total before).
+    const deadline = Date.now() + timeoutMs;
+    remainingMs = () => Math.max(1, deadline - Date.now());
     const [s, p] = await Promise.all([loadSecrets(), loadParams()]);
-    return { ...s, ...p };
+    // Secrets-then-params: a param mapping to a secret's key is a collision
+    // too (the two layers are independent), never a silent last-wins.
+    const out: Flat = { ...s };
+    mergeOrThrow(out, p, name);
+    return out;
   }
 
   void opts.region;

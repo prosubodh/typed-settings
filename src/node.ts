@@ -6,46 +6,79 @@
  *
  * @module
  */
-import { readFileSync, readdirSync, statSync, watch } from 'node:fs';
+import { readFileSync, readdirSync, statSync, lstatSync, realpathSync, watch } from 'node:fs';
 import type { FSWatcher } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import type { Flat, SettingsOptions } from './types.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { parseEnvText } from './formats/env.js';
+import { isPlainObject } from './merge.js';
 import { settings } from './index.js';
-import { ConfigError } from './errors.js';
+import { ConfigError, byteLengthUtf8 } from './errors.js';
 
 // Make sync file reads work in ESM (vitest/node) via injection hook read by src/index.ts.
 // Edge bundlers never import `typed-settings/node`, so core stays fs-free for them.
-(globalThis as unknown as { __typedSettingsFs?: { readFileSync(p: string, e: string): string } }).__typedSettingsFs ??= {
+(globalThis as unknown as { __typedSettingsFs?: { readFileSync(p: string, e: string): string; statSync?(p: string): { size: number } } }).__typedSettingsFs ??= {
   readFileSync: (p: string, e: string) => readFileSync(p, e as BufferEncoding),
+  statSync: (p: string) => statSync(p),
 };
 
 /**
  * Reads dotenv files and joins them with newlines for `{ text }` sources.
- * Missing files are skipped; anything else (e.g. `EACCES`) rethrows.
+ * Missing files are skipped; anything else (e.g. `EACCES`) rethrows. Total
+ * size is capped (default 2 MiB, same as `loadSecretsDir`) so a hostile or
+ * symlinked `.env` cannot balloon memory — exceed it and `E_FILE_TOO_LARGE`.
  */
-export function loadEnvFiles(paths: string[]): { text: string } {
+export function loadEnvFiles(paths: string[], opts: { maxBytes?: number } = {}): { text: string } {
+  const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    throw new ConfigError([{ path: '<envFiles>', from: 'loadEnvFiles', message: 'E_USAGE: maxBytes must be a positive number' }], 'E_USAGE');
+  }
   const parts: string[] = [];
+  let total = 0;
   for (const p of paths) {
     try {
-      parts.push(readFileSync(p, 'utf8'));
+      const raw = readFileSync(p, 'utf8');
+      const bytes = byteLengthUtf8(raw);
+      if (bytes > maxBytes || total + bytes > maxBytes) {
+        throw new ConfigError(
+          [{ path: p, from: 'loadEnvFiles', message: 'E_FILE_TOO_LARGE: env text over cap' }],
+          'E_FILE_TOO_LARGE',
+        );
+      }
+      total += bytes;
+      parts.push(raw);
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err?.code === 'ENOENT') continue; // missing -> skip
-      throw e;
+      throw e; // includes our own ConfigError: never swallowed as a 'missing' file
     }
   }
   return { text: parts.join('\n') };
 }
 
+/** Options for {@link loadSecretsDir}. */
+export interface LoadSecretsDirOptions {
+  /** Keep empty files as `''` instead of skipping them. Default false (skip). */
+  preserveEmpty?: boolean;
+  /** Per-file read cap in UTF-8 bytes. Default 2 MiB (matches core `maxBytes`). */
+  maxBytes?: number;
+}
+
 /**
  * Reads a secrets dir (Docker/K8s `/run/secrets`) into a flat map keyed by
- * uppercased filenames. Skips subdirectories, `..*` entries, and empties; strips
- * one trailing newline but otherwise preserves whitespace verbatim. Missing dir
- * reads as `{}`; unreadable files throw (`EACCES` fails closed).
+ * uppercased filenames. Skips subdirectories, `..*` entries, and (by default)
+ * empties; strips one trailing newline but otherwise preserves whitespace
+ * verbatim. Missing dir reads as `{}`; unreadable files throw (`EACCES` fails
+ * closed). Symlinks are confined to the dir (K8s `..data` links resolve inside);
+ * links escaping it throw. Case collisions (`Token` vs `TOKEN`) throw instead
+ * of depending on readdir order.
  */
-export function loadSecretsDir(dir: string): Flat {
+export function loadSecretsDir(dir: string, opts: LoadSecretsDirOptions = {}): Flat {
+  const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    throw new ConfigError([{ path: dir, from: dir, message: 'E_USAGE: maxBytes must be a positive finite number' }], 'E_USAGE');
+  }
   const out: Flat = {};
   let entries: string[];
   try {
@@ -55,29 +88,81 @@ export function loadSecretsDir(dir: string): Flat {
     if (err?.code === 'ENOENT') return out;
     throw e;
   }
+  const root = resolve(dir);
   for (const name of entries) {
     const full = join(dir, name);
+    // lstat first: never follow a symlink blindly. K8s mounts secrets as
+    // symlinks to `..data_<ts>` inside the dir — allow those, reject escapes.
+    let st: { isFile(): boolean; isSymbolicLink(): boolean; size: number };
     try {
-      const st = statSync(full);
-      if (!st.isFile()) continue;
+      st = lstatSync(full);
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err?.code === 'ENOENT') continue;
       throw e;
     }
+    if (st.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = realpathSync(full);
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err?.code === 'ENOENT') continue;
+        throw e;
+      }
+      const rel = relative(root, target);
+      // Escape = outside root (covers `..`, absolute cross-drive results, sep tricks).
+      if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new ConfigError(
+          [{ path: name, from: dir, message: 'E_SHAPE: secret symlink escapes its directory' }],
+          'E_SHAPE',
+        );
+      }
+      try {
+        const tst = statSync(target);
+        if (!tst.isFile()) continue;
+        if (tst.size > maxBytes + 1) {
+          throw new ConfigError([{ path: name, from: dir, message: 'E_FILE_TOO_LARGE: secret over cap' }], 'E_FILE_TOO_LARGE');
+        }
+      } catch (e) {
+        if (e instanceof ConfigError) throw e;
+        const err = e as NodeJS.ErrnoException;
+        if (err?.code === 'ENOENT') continue;
+        throw e;
+      }
+    } else if (!st.isFile()) {
+      continue; // dirs, FIFOs, sockets: never block on or read special files
+    } else if (st.size > maxBytes + 1) {
+      throw new ConfigError([{ path: name, from: dir, message: 'E_FILE_TOO_LARGE: secret over cap' }], 'E_FILE_TOO_LARGE');
+    }
     if (name.startsWith('..')) continue; // skip K8s symlinks except pinned target handled by caller
-    let v: string;
+    let raw: string;
     try {
-      // Strip one trailing newline (files conventionally end with \n); interior
-      // and leading whitespace is significant secret material — never trim it.
-      v = readFileSync(full, 'utf8').replace(/\r?\n$/, '');
+      raw = readFileSync(full, 'utf8');
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err?.code === 'ENOENT') continue;
       throw e; // EACCES and friends fail closed — a missing secret must not read as {}
     }
-    if (!v) continue;
-    out[name.toUpperCase()] = v;
+    /* v8 ignore next 6 -- TOCTOU race window: stat gate covers it deterministically */
+    if (byteLengthUtf8(raw) > maxBytes + 1) {
+      // Post-read backstop for TOCTOU growth between stat and read. Bytes, not
+      // string length: multibyte content must not slip the cap in the window.
+      throw new ConfigError([{ path: name, from: dir, message: 'E_FILE_TOO_LARGE: secret over cap' }], 'E_FILE_TOO_LARGE');
+    }
+    // Strip one trailing newline (files conventionally end with \n); interior
+    // and leading whitespace is significant secret material — never trim it.
+    const v = raw.replace(/\r?\n$/, '');
+    if (!v && !opts.preserveEmpty) continue;
+    // ASCII fold: env keys are ASCII; locale-sensitive casing must not merge them.
+    const key = name.replace(/[a-z]/g, (c) => c.toUpperCase());
+    if (key in out) {
+      throw new ConfigError(
+        [{ path: name, from: dir, message: `E_SHAPE: secret name collision on ${key}` }],
+        'E_SHAPE',
+      );
+    }
+    out[key] = v;
   }
   return out;
 }
@@ -144,33 +229,58 @@ function extractWatchFiles(sources: SettingsOptions<StandardSchemaV1>['sources']
 }
 
 function hasPollSources(sources: SettingsOptions<StandardSchemaV1>['sources']): boolean {
+  // Providers only: `{ dir }` throws in core (resolve via loadSecretsDir first),
+  // so directory polling is the caller's job via refreshMs.
   return (sources ?? []).some(
-    (s) => (s && typeof s === 'object' && ('dir' in s || 'provider' in s || 'load' in s)),
+    (s) => (s && typeof s === 'object' && ('provider' in s || 'load' in s)),
   );
 }
 
+function leafEqual(a: unknown, b: unknown): boolean {
+  // Plain objects/arrays are compared structurally in diffLeafPaths (so key
+  // order never reports a change); leaves only need identity, except non-plain
+  // objects (Date, class instances), which compare by JSON shape. The stringify
+  // is guarded: exotic values (BigInt holders) report changed, never crash.
+  if (a === b || Object.is(a, b)) return true;
+  if (typeof a !== typeof b) return false;
+  if (a && b && typeof a === 'object') {
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 function diffLeafPaths(a: unknown, b: unknown, prefix = ''): string[] {
-  if (Array.isArray(a) && Array.isArray(b)) {
-    const out: string[] = [];
-    const len = Math.max(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-      const p = prefix ? `${prefix}[${i}]` : `[${i}]`;
-      if (i >= a.length || i >= b.length) out.push(p);
-      else out.push(...diffLeafPaths(a[i], b[i], p));
+  // Explicit stack, not recursion: hostile nesting that survived the pipeline
+  // guards (or grew between validation and diff) must report, never throw
+  // RangeError out of doReload() into an unhandled rejection.
+  const out: string[] = [];
+  const stack: [unknown, unknown, string][] = [[a, b, prefix]];
+  while (stack.length > 0) {
+    const [x, y, p] = stack.pop()!;
+    if (Array.isArray(x) && Array.isArray(y)) {
+      const len = Math.max(x.length, y.length);
+      for (let i = len - 1; i >= 0; i--) {
+        const q = p ? `${p}[${i}]` : `[${i}]`;
+        if (i >= x.length || i >= y.length) out.push(q);
+        else stack.push([x[i], y[i], q]);
+      }
+    } else if (isPlainObject(x) && isPlainObject(y)) {
+      const keys = [...new Set([...Object.keys(x as object), ...Object.keys(y as object)])];
+      for (let i = keys.length - 1; i >= 0; i--) {
+        const k = keys[i]!;
+        const q = p ? `${p}.${k}` : k;
+        if (!(k in (x as object)) || !(k in (y as object))) out.push(q);
+        else stack.push([(x as Record<string, unknown>)[k], (y as Record<string, unknown>)[k], q]);
+      }
+    } else if (!leafEqual(x, y)) {
+      out.push(p || '<root>');
     }
-    return out;
   }
-  if (a && typeof a === 'object' && b && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
-    const out: string[] = [];
-    const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
-    for (const k of keys) {
-      const p = prefix ? `${prefix}.${k}` : k;
-      if (!(k in (a as object)) || !(k in (b as object))) out.push(p);
-      else out.push(...diffLeafPaths((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], p));
-    }
-    return out;
-  }
-  return JSON.stringify(a) === JSON.stringify(b) ? [] : [prefix || '<root>'];
+  return out;
 }
 
 async function stableSize(path: string, retries = 3): Promise<void> {
@@ -220,6 +330,9 @@ export function watchSettings<S extends StandardSchemaV1>(
   const watchers: FSWatcher[] = [];
   const intervals: ReturnType<typeof setInterval>[] = [];
   const watchedDirs = new Set<string>();
+  // Basenames of interest per dir. Updated on every re-arm so files created
+  // after startup join the filter instead of being ignored forever.
+  const wantedByDir = new Map<string, Set<string>>();
 
   const handle: WatchHandle<StandardSchemaV1.InferOutput<S>> = {
     get: () => current,
@@ -229,7 +342,10 @@ export function watchSettings<S extends StandardSchemaV1>(
     dispose: async () => {
       if (disposed) return;
       disposed = true;
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       for (const iv of intervals) clearInterval(iv);
       for (const w of watchers) {
         try {
@@ -246,8 +362,10 @@ export function watchSettings<S extends StandardSchemaV1>(
 
   async function doReload(): Promise<void> {
     const myId = ++reloadId;
+    if (disposed) return;
     // Re-arm watchers first (picks up files/dirs created since startup),
     // then settle files in parallel — sequential 20ms sleeps would stall N files.
+    // (No staleness check here: no await has run yet, so reloadId cannot have changed.)
     ensureWatchers();
     const files = extractWatchFiles(opts.sources);
     await Promise.all(
@@ -299,19 +417,45 @@ export function watchSettings<S extends StandardSchemaV1>(
     // (Re)arm parent-dir watchers. Watching the directory (not the file) survives
     // atomic renames; this also picks up files/dirs that did not exist at startup
     // (missing file = skip is valid, but creation must still trigger a reload).
+    // Dedupe by directory: N files in one dir share one watcher.
+    const byDir = new Map<string, string[]>();
     for (const file of extractWatchFiles(opts.sources)) {
       const dir = dirname(file);
       const base = basename(file);
-      const key = dir + '\0' + base;
+      const list = byDir.get(dir) ?? [];
+      list.push(base);
+      byDir.set(dir, list);
+    }
+    for (const [dir, bases] of byDir) {
+      let wanted = wantedByDir.get(dir);
+      if (!wanted) {
+        wanted = new Set<string>();
+        wantedByDir.set(dir, wanted);
+      }
+      for (const b of bases) wanted.add(b);
+      const key = dir;
       if (watchedDirs.has(key)) continue;
       try {
+        const live = wanted;
         const w = watch(dir, (_event, filename) => {
           const name = typeof filename === 'string' ? filename : filename ? String(filename) : null;
-          if (name && name !== base) return;
+          // filename may be null on some platforms — reload (debounced) rather
+          // than ignore, but dir-dedupe keeps it to one reload per change.
+          if (name && !live.has(name)) return;
           scheduleReload();
         });
         w.on('error', () => {
-          // best-effort; poll fallback covers failures
+          // Evict so the next reload retries; drop the dead handle so failures
+          // don't accumulate one entry per cycle. Re-arm on a tick (not inline:
+          // error handlers may iterate live watcher lists, and inline re-arm
+          // would append mid-iteration). If the dir recovered there is no blind
+          // window; if not, the throw is swallowed and the next reload retries.
+          watchedDirs.delete(key);
+          wantedByDir.delete(key);
+          watchers.splice(watchers.indexOf(w), 1);
+          setTimeout(() => {
+            if (!disposed) ensureWatchers();
+          }, 0);
         });
         watchers.push(w);
         watchedDirs.add(key);
@@ -324,10 +468,12 @@ export function watchSettings<S extends StandardSchemaV1>(
   ensureWatchers();
 
   if (pollMs > 0) {
-    intervals.push(setInterval(scheduleReload, pollMs));
+    // Poll/refresh drive reloads directly: routing them through the debounced
+    // fs-event path would let a hot interval starve reloads forever.
+    intervals.push(setInterval(() => void doReload(), pollMs));
   }
   if (refreshMs > 0) {
-    intervals.push(setInterval(scheduleReload, refreshMs));
+    intervals.push(setInterval(() => void doReload(), refreshMs));
   }
 
   return handle;

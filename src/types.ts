@@ -43,7 +43,11 @@ export interface SettingsOptions<S extends StandardSchemaV1 = StandardSchemaV1> 
   sources?: SourceInput[];
   /** Global prefix strip (case-insensitive, once). */
   prefix?: string;
-  /** Fixed to `'__'`; only double underscores split keys. */
+  /**
+   * Fixed to `'__'`; only double underscores split keys. Not configurable —
+   * the field exists so the constraint is visible (and greppable) at the type
+   * level rather than hidden in the key-expansion code.
+   */
   separator?: '__';
   /** Best-effort leaf coercion before validation. Default true. */
   coerce?: boolean; // default true
@@ -67,4 +71,20 @@ export interface SettingsOptions<S extends StandardSchemaV1 = StandardSchemaV1> 
   allowUnresolved?: boolean; // default false
   /** Injectable env snapshot (tests, Edge). Defaults to process.env when available. */
   env?: Flat; // injectable env snapshot (Edge-safe). Defaults to process.env when available.
+  /**
+   * Extra secret matchers beyond the default (`key|secret|token|password|private`,
+   * case-insensitive substring). Strings match case-insensitively as substrings,
+   * RegExps test as given. Secret-looking error paths get value redaction.
+   */
+  secretKeys?: (string | RegExp)[];
+  /**
+   * Injectable filesystem for file sources (tests, bundlers, Edge shims).
+   * Takes precedence over the `typed-settings/node` global hook and the
+   * `require('node:fs')` fallback. `statSync` enables a pre-read size check
+   * against `maxBytes` so oversized files never fully materialize.
+   */
+  fs?: {
+    readFileSync(path: string, encoding: string): string;
+    statSync?(path: string): { size: number };
+  };
 }

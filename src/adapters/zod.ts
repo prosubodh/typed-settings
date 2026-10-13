@@ -5,6 +5,8 @@
  * @module
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { ConfigError } from '../errors.js';
+import { isProtoKey, stripPrefix } from '../merge.js';
 
 // withPrefix: scoped prefix helper. Strips `prefix` from flat input keys before
 // validation, then re-nests result under the schema shape.
@@ -28,16 +30,25 @@ export function withPrefix<S extends StandardSchemaV1>(schema: S, prefix: string
         if (input && typeof input === 'object' && !Array.isArray(input)) {
           const rec = input as Record<string, unknown>;
           const stripped: Record<string, unknown> = {};
-          const low = prefix.toLowerCase();
           for (const [k, v] of Object.entries(rec)) {
-            if (k.toLowerCase().startsWith(low)) {
-              const rest = k.slice(prefix.length);
-              // A key that IS the prefix has no remainder — keep it verbatim and let
-              // the schema decide (dropping user data silently would be worse).
-              stripped[rest ? rest.toLowerCase() : k] = v;
-            } else if (!(k.toLowerCase() in stripped)) {
-              stripped[k] = v;
+            // The raw key is never allowed to be the assignment-hijacker.
+            if (isProtoKey(k)) {
+              throw new ConfigError([{ path: k, from: 'withPrefix', message: 'E_PROTO: forbidden key' }], 'E_PROTO');
             }
+            const rest = stripPrefix(k, prefix);
+            if (rest === null) {
+              if (!(k.toLowerCase() in stripped)) stripped[k] = v;
+              continue;
+            }
+            // rest is guaranteed non-empty whenever prefix matched with a
+            // remainder (stripPrefix nulls length-short/mismatch/boundary keys,
+            // which are handled above as unprefixed pass-throughs).
+            const key = rest.toLowerCase();
+            // Same fail-closed rule as core: only __proto__ hijacks an assignment.
+            if (isProtoKey(key)) {
+              throw new ConfigError([{ path: k, from: 'withPrefix', message: 'E_PROTO: forbidden key' }], 'E_PROTO');
+            }
+            stripped[key] = v;
           }
           return inner['~standard'].validate(stripped);
         }

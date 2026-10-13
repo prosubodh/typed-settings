@@ -17,10 +17,17 @@ import type { SettingsOptions } from '../types.js';
 export { settings, settingsAsync, ConfigError, pickPublic };
 
 /** Explicit public subset - no spread, keys enumerated so secrets can't leak via `...cfg`. */
-export function publicSettings<T extends object, K extends keyof T>(cfg: T, keys: readonly K[]): Pick<T, K> {
-  const out = {} as Pick<T, K>;
+export function publicSettings<T extends object, K extends keyof T>(cfg: T, keys: readonly K[]): Partial<Pick<T, K>> {
+  const out = {} as Partial<Pick<T, K>>;
   // Only copy keys actually present — a missing key yields no entry, not `{k: undefined}`.
-  for (const k of keys) if (k in (cfg as object)) out[k] = cfg[k];
+  // Own-property check + prototype-key refusal: `in` would copy inherited members.
+  // NOTE: nested objects are copied whole — only list leaf-safe top-level keys.
+  // The result is Partial: a listed key that is absent simply has no entry.
+  for (const k of keys) {
+    const ks = String(k);
+    if (ks === '__proto__' || ks === 'constructor' || ks === 'prototype') continue;
+    if (Object.hasOwn(cfg as object, k)) out[k] = cfg[k];
+  }
   return out;
 }
 

@@ -44,7 +44,7 @@ await sub.dispose();  // idempotent, safe to call twice
 sub.version;          // bumps on every successful reload
 ```
 
-How it behaves: parent directories are watched, so atomic renames don't lose the subscription. Files created after startup get picked up on reload. Validation runs off to the side and the old config stays live when the new one is broken. Callback throws never escape the watcher.
+How it behaves: parent directories are watched, so atomic renames don't lose the subscription. Files created after startup get picked up on reload. Validation runs off to the side and the old config stays live when the new one is broken. Callback throws never escape the watcher. A reload that finds no value changes (an mtime-only touch) still calls `onUpdate`, with `changed` empty — the config is unchanged, so it's a safe no-op for consumers (the CLI uses exactly this to avoid restarting its child process).
 
 ## Tests
 
@@ -54,7 +54,7 @@ import { withOverrides } from 'typed-settings';
 withOverrides({ PORT: '1' }, () => settings({ schema }));
 ```
 
-`process.env` is patched for the duration and restored after, across awaits and on throws. Pass `env: {}` (or your own map) to isolate from ambient variables completely.
+`process.env` is patched for the duration and restored after, across awaits and on throws. Pass `env: {}` (or your own map) to isolate from ambient variables completely. Not safe for overlapping concurrent use — serialize `withOverrides` calls sharing the process env.
 
 Vault providers in tests take injected fakes (`fetchFn`, `secretsClient`, `ssmClient`). No live servers needed; see [vault.md](vault.md).
 
@@ -78,5 +78,9 @@ import { loadSecretsDir } from 'typed-settings/node';
 // Whitespace is preserved (only one trailing newline goes),
 // `..*` entries and subdirectories are skipped,
 // and a missing directory reads as {}.
+// Symlinks are confined to the dir (K8s `..data` links OK, escapes throw),
+// case collisions (`Token` vs `TOKEN`) throw, oversized files throw
+// (`maxBytes`, default 2 MiB), and empties are skipped unless
+// `preserveEmpty: true` keeps them as `''`.
 const cfg = settings({ schema, sources: [{ map: loadSecretsDir('/run/secrets') }, 'env'] });
 ```
