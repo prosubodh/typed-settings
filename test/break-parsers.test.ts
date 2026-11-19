@@ -168,6 +168,7 @@ describe('break: coerce', () => {
 
   it('csv: escapes, quotes, unterminated', () => {
     expect(tryParseEnvValue('a\\,b,c')).toEqual(['a,b', 'c']);
+    expect(tryParseEnvValue('a\\\\,b')).toEqual(['a\\\\', 'b']);
     expect(tryParseEnvValue('a,"b,c')).toBe('a,"b,c'); // unterminated stays string, never throws
     expect(tryParseEnvValue('a, " b " ,c')).toEqual(['a', ' b ', 'c']);
     expect(tryParseEnvValue("'a,b',c")).toEqual(['a,b', 'c']);
@@ -253,6 +254,8 @@ describe('break: .env parser', () => {
     expect(parseEnvText('A="a\\nB"')).toEqual({ A: 'a\nB' });
     expect(parseEnvText('A="x\ny"')).toEqual({ A: 'x\ny' });
     expect(parseEnvText('A="a # b" # c')).toEqual({ A: 'a # b' });
+    expect(parseEnvText('A="hello\\\\"\nB=1')).toEqual({ A: 'hello\\', B: '1' });
+    expect(parseEnvText('A="line1 \\"\nline2"')).toEqual({ A: 'line1 "\nline2' });
     // Trailing lone backslash consumes the closing quote -> unterminated.
     expect(() => parseEnvText('A="a\\"')).toThrow(/unterminated/);
   });

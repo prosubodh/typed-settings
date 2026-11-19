@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { publicSettings } from '../src/framework/next.js';
-import { viteSettings } from '../src/framework/vite.js';
-import { settings } from '../src/index.js';
+import { viteSettings, viteSettingsAsync } from '../src/framework/vite.js';
+import { settings, viteSettingsAsync as viteSettingsAsyncRoot } from '../src/index.js';
 
 describe('next binding', () => {
   it('publicSettings exposes only explicit keys (no spread leak)', () => {
@@ -23,6 +23,16 @@ describe('vite binding', () => {
     const schema = z.object({ port: z.coerce.number().default(3000) });
     const cfg = viteSettings({ schema }, { PORT: '4000' });
     expect(cfg.port).toBe(4000);
+  });
+
+  it('viteSettingsAsync validates with async schema from framework entry and root', async () => {
+    const schema = z.object({
+      port: z.coerce.number().refine(async (val) => val > 1024, 'port must be > 1024'),
+    });
+    const cfg = await viteSettingsAsync({ schema }, { PORT: '8080' });
+    expect(cfg.port).toBe(8080);
+    const cfgRoot = await viteSettingsAsyncRoot({ schema }, { PORT: '9090' });
+    expect(cfgRoot.port).toBe(9090);
   });
 
   it('publicSettings omits missing keys (Partial, statically honest)', () => {

@@ -79,7 +79,7 @@ function hasBareComma(s: string): boolean {
       quote = c;
       continue;
     }
-    if (c === '\\' && s[i + 1] === ',') {
+    if (c === '\\' && i + 1 < s.length) {
       i++;
       continue;
     }
@@ -114,8 +114,12 @@ function splitCsv(s: string): string[] | null {
       cur += c;
       continue;
     }
-    if (c === '\\' && s[i + 1] === ',') {
-      cur += ',';
+    if (c === '\\' && i + 1 < s.length) {
+      if (s[i + 1] === ',') {
+        cur += ',';
+      } else {
+        cur += c + s[i + 1];
+      }
       i++;
       continue;
     }

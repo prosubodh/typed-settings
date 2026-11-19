@@ -113,6 +113,17 @@ export function viteSettings<S extends StandardSchemaV1>(
   return settings({ ...opts, sources: [{ map: metaEnv }], env: {} });
 }
 
+/**
+ * Async twin of {@link viteSettings} for async schemas: validates the map
+ * with no filesystem and no ambient env, awaited through `settingsAsync()`.
+ */
+export function viteSettingsAsync<S extends StandardSchemaV1>(
+  opts: SettingsOptions<S>,
+  metaEnv: Flat,
+): Promise<StandardSchemaV1.InferOutput<S>> {
+  return settingsAsync({ ...opts, sources: [{ map: metaEnv }], env: {} });
+}
+
 type FsHook = {
   readFileSync(p: string, e: string): string;
   statSync?(p: string): { size: number };
