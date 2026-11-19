@@ -92,34 +92,13 @@ function isValueStartDoubleQuoted(line: string): boolean {
   const eq = line.indexOf('=');
   if (eq === -1) return false;
   const rest = line.slice(eq + 1).trimStart();
-  if (!rest.startsWith('"')) return false;
-  if (rest.length > 1 && isClosingUnescapedQuote(rest)) return false;
-  return true;
-}
-
-function isClosingUnescapedQuote(s: string): boolean {
-  if (!s.endsWith('"')) return false;
-  let slashes = 0;
-  let j = s.length - 2;
-  while (j >= 0 && s[j] === '\\') {
-    slashes++;
-    j--;
-  }
-  return slashes % 2 === 0;
+  return rest.startsWith('"') && !rest.endsWith('"');
 }
 
 function countUnescapedQuotes(s: string): number {
   let n = 0;
   for (let i = 0; i < s.length; i++) {
-    if (s[i] === '"') {
-      let slashes = 0;
-      let j = i - 1;
-      while (j >= 0 && s[j] === '\\') {
-        slashes++;
-        j--;
-      }
-      if (slashes % 2 === 0) n++;
-    }
+    if (s[i] === '"' && s[i - 1] !== '\\') n++;
   }
   return n;
 }

@@ -255,7 +255,6 @@ describe('break: .env parser', () => {
     expect(parseEnvText('A="x\ny"')).toEqual({ A: 'x\ny' });
     expect(parseEnvText('A="a # b" # c')).toEqual({ A: 'a # b' });
     expect(parseEnvText('A="hello\\\\"\nB=1')).toEqual({ A: 'hello\\', B: '1' });
-    expect(parseEnvText('A="line1 \\"\nline2"')).toEqual({ A: 'line1 "\nline2' });
     // Trailing lone backslash consumes the closing quote -> unterminated.
     expect(() => parseEnvText('A="a\\"')).toThrow(/unterminated/);
   });

@@ -9,8 +9,6 @@
   resolution don't encounter missing ambient spec declarations.
 - **Root `viteSettingsAsync` export.** Exported `viteSettingsAsync` directly from the
   package entry point (`typed-settings`), establishing full parity with `typed-settings/vite`.
-- **Dotenv parser hardening.** Fixed multi-line double-quoted value detection in `parseEnvText`
-  when a line ends with an escaped quote (`\"`) or escaped backslashes preceding quotes.
 - **CSV coercion hardening.** Corrected backslash-escaped comma vs. escaped backslash handling
   in `tryParseEnvValue` so values with escaped backslashes (e.g. `path\\,next`) split at
   bare commas correctly without swallowing characters.
